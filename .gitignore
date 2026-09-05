@@ -1,0 +1,20 @@
+# Separate Independent Repository
+smartroom-web/
+
+# Private Wi-Fi credentials & secrets
+wifi_duku.json
+wifi_*.json
+!wifi_credentials.example.json
+
+# Scratch, logs, and temporary work
+Particle/target/
+Particle/nul
+scratch/
+*.log
+*.tmp
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
