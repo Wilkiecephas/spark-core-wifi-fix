@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "name": "Spark Core Wi-Fi & Firmware (stm32)",
+      "path": "."
+    },
+    {
+      "name": "SmartRoom Web Dashboard (smartroom-web)",
+      "path": "smartroom-web"
+    }
+  ],
+  "settings": {
+    "git.autoRepositoryDetection": "subFolders",
+    "git.repositoryScanMaxDepth": 4,
+    "github.gitAuthentication": true,
+    "git.terminalAuthentication": true,
+    "git.confirmSync": false
+  }
+}
