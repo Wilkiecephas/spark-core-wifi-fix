@@ -1,371 +1,238 @@
 /*
  * ============================================================================
- * SMART ROOM MONITORING SYSTEM (SPARK CORE NATIVE - NO ARDUINO UNO REQUIRED)
+ * SMART ROOM MONITORING SYSTEM (SPARK CORE NATIVE) - CALIBRATED & STABILIZED
  * ============================================================================
- * Course: TETE/TEEE 3102 - Microcontrollers
- * Kyambogo University - Faculty of Engineering
- *
- * Direct Hardware Integration:
- * - 9-in-1 Multifunctional Expansion Shield (DHT11, Buzzer, RGB LED, LDR)
- * - SZ-HS100 Analog Humidity Sensor (Analog Pin A0, 0-3.3V ADC)
- * - HC-SR04 Ultrasonic Distance Sensor
- * - 12V PIR Motion Sensor / HC-SR501 (Digital Pin D3, INPUT_PULLUP Dry Contact)
- *
- * Cloud Target:
- * - ThingSpeak Channel ID: 3475948 (Write API Key: 2W20O13FTT3CIUD3)
- * - Particle Cloud Telemetry (Variables & Events)
- *
- * Cadence: Sensor acquisition and ThingSpeak cloud transmission every 20 seconds.
- * Alert Thresholds:
- * - Buzzer & Visual Alert when (motion == 1 || distance < 20.0 cm)
+ * Pin Mapping:
+ * - D0 & D1   -> HC-SR04 Ultrasonic Sonar (D1=Trig, D0=Echo; reverse via cloud)
+ * - D2 (SW1)  -> Push Button SW1 (Active-LOW: Mutes buzzer / clears alert)
+ * - D4        -> DHT11 Digital Temperature & Humidity Sensor (Read every 2.5s)
+ * - D5        -> Active Buzzer (Direct logic drive; quiet & calm, no screeching)
+ * - D6        -> Infrared (IR) Obstacle / Proximity Sensor (Active-LOW)
+ * - D7        -> Spark Core Onboard Blue LED (Alert visual indicator)
+ * - A0        -> Rotary Potentiometer / Secondary Humidity (0-3.3V ADC)
+ * - A1        -> UNUSED (Completely removed to eliminate 5V rail interference)
+ * - A2        -> LM35 Precision Analog Temperature Sensor (10mV/°C)
  * ============================================================================
  */
 
 #include "application.h"
 
-// ----------------------------------------------------------------------------
-// PIN ASSIGNMENTS (Spark Core <-> 9-in-1 Shield & Expansion Sensors)
-// ----------------------------------------------------------------------------
-// Digital Side: D0-D6 on 9-in-1 Shield <-> D0-D7 (minus D3) on Spark Core
-int pinEcho               = D0;   // 9-in-1 D0 (Shield TX): HC-SR04 Echo (5V tolerant Input)
-int pinTrig               = D1;   // 9-in-1 D1 (Shield RX): HC-SR04 Trigger (3.3V Output)
-const int PIN_KEY1        = D2;   // 9-in-1 D2: Push Button Key 1 (INPUT_PULLUP)
-const int PIN_FREE_D3     = D3;   // Spark Core D3: FREE 5V-Tolerant GPIO / Interrupt (Optional External PIR / Gas DO / Flame)
-const int PIN_DHT11       = D4;   // 9-in-1 D4: DHT11 Data (5V tolerant)
-const int PIN_BUZZER      = D5;   // 9-in-1 D5: Buzzer Transistor Input
-const int PIN_KEY2        = D6;   // 9-in-1 D6: Push Button Key 2 (INPUT_PULLUP)
-const int PIN_AUX_D7      = D7;   // Spark Core D7: FREE 5V-Tolerant GPIO + Onboard Blue LED (Relay / Strobe / Actuator)
+// Hardware Pin Definitions
+int pinTrig             = D1;   // Default Trig (Auto-tested / cloud-swappable)
+int pinEcho             = D0;   // Default Echo
+const int PIN_SW1       = D2;   // SW1 Button (Mute)
+const int PIN_DHT11     = D4;   // DHT11 Sensor Data
+const int PIN_BUZZER    = D5;   // Active Buzzer on Shield
+const int PIN_IR_D6     = D6;   // IR Obstacle Sensor
+const int PIN_LED_D7    = D7;   // Spark Core Onboard Blue LED
 
-// Analog Side: A0-A5 on 9-in-1 Shield <-> A0-A5 on Spark Core
-const int PIN_SZ_HS100    = A0;   // 9-in-1 A0: Potentiometer / SZ-HS100 Humidity Sensor (0-3.3V ADC)
-const int PIN_LDR         = A1;   // 9-in-1 A1: LDR Light Sensor (0-4095 ADC)
-const int PIN_LM35        = A2;   // 9-in-1 A2: LM35 Precision Temperature Sensor (0-4095 ADC)
-const int PIN_AUX_A3      = A3;   // 9-in-1 A3: Auxiliary Analog Sensor 1 (MQ-2 Gas / Flame / Sound) (0-3.3V ADC)
-const int PIN_AUX_A4      = A4;   // 9-in-1 A4: Auxiliary Analog / I2C SDA (0-3.3V ADC)
-const int PIN_AUX_A5      = A5;   // 9-in-1 A5: Auxiliary Analog / I2C SCL (0-3.3V ADC)
+const int PIN_POT_A0    = A0;   // Shield Potentiometer
+const int PIN_LM35_A2   = A2;   // LM35 Analog Temperature Sensor
 
-// Unrouted Spark Core Pins (Completely free for external modules):
-const int PIN_AUX_A6      = A6;   // Spark Core A6: FREE 12-bit ADC / DAC / PWM (Soil Moisture / Sound Analog)
-const int PIN_AUX_A7      = A7;   // Spark Core A7: FREE 12-bit ADC / PWM / Hardware Wakeup
-// Spark Core TX (PA9) & RX (PA10): FREE 5V-Tolerant USART Serial1 (GPS / CO2 / Laser LiDAR)
+// Thresholds
+const int PROXIMITY_THRESHOLD_CM = 40;   // Alert threshold (< 40 cm)
+const unsigned long DHT_SAMPLE_MS = 2500; // DHT11 sample interval (2.5s)
+const unsigned long TELEMETRY_MS  = 20000; // Particle publish interval (20s)
 
-// ----------------------------------------------------------------------------
-// CLOUD CONFIGURATION
-// ----------------------------------------------------------------------------
-const char* THINGSPEAK_KEY  = "2W20O13FTT3CIUD3";
-IPAddress   THINGSPEAK_IP(44, 213, 137, 49); // Direct IP
-const int   THINGSPEAK_PORT = 80;
+// State Variables (Spark Core supports max 4 variables reliably)
+int currentDist   = 120;   // Distance in cm
+int currentTemp   = 24;    // Temperature in deg C
+int currentHum    = 50;    // Humidity in % RH
+int currentMotion = 0;     // 0=Clear, 1=Object close to IR sensor
 
-const unsigned long TRANSMIT_INTERVAL_MS = 20000; // 20s
-const int           PROXIMITY_THRESHOLD  = 20;    // 20 cm
+// Internal Diagnostics
+int tempDht       = 0;
+int humDht        = 0;
+int tempLm35      = 24;
+int rawA2         = 0;
+int rawA0         = 0;
+int dhtOk         = 0;
+int ultrasonicMode= 0;     // 0: D1=Trig, D0=Echo; 1: D0=Trig, D1=Echo
 
-// ----------------------------------------------------------------------------
-// HUMIDITY SENSOR SOURCE MODES
-// ----------------------------------------------------------------------------
-enum HumiditySourceMode {
-    HUM_MODE_DHT11    = 0,  // DHT11 Digital Sensor (D4)
-    HUM_MODE_SZ_HS100 = 1,  // SZ-HS100 Analog Sensor (A0)
-    HUM_MODE_DUAL     = 2   // Dual mode (Reads both, reports analog primary)
-};
+bool buzzerMuted      = false;
+bool buzzerActiveLow  = true;  // 9-in-1 active buzzer: LOW=On, HIGH=Off
+
+unsigned long lastFastLoopTime = 0;
+unsigned long lastDhtTime      = 0;
+unsigned long lastChirpTime    = 0;
+unsigned long lastPublishTime  = 0;
+int  irFilterCount     = 0;
+int  distHistory[3]    = {120, 120, 120};
+int  distHistIdx       = 0;
 
 // ----------------------------------------------------------------------------
-// SENSOR DATA STATE (Integer representations: temp*10, hum*10, dist in cm)
+// BUZZER CONTROL (Quiet & Gentle, No Screeching)
 // ----------------------------------------------------------------------------
-int currentTemp   = 24;      // degrees C
-int currentHum    = 55;      // active humidity percent
-int currentDist   = 150;     // cm
-int currentMotion = 0;       // 0 or 1
-int currentLight  = 0;       // 0-4095
-int isAlert       = 0;       // 0 or 1
-int pirFilterCounter = 0;    // Anti-chatter filter for PIR contact
-bool pirMonitoringEnabled = true; // Enabled by default; INPUT_PULLUP prevents floating false-alarms
-int pirTriggerLevel = LOW;   // 12V PIR dry-contact closes circuit to GND on motion (Active-LOW: LOW=Motion)
+void setBuzzer(bool on) {
+    if (on && !buzzerMuted) {
+        digitalWrite(PIN_BUZZER, buzzerActiveLow ? LOW : HIGH);
+    } else {
+        digitalWrite(PIN_BUZZER, buzzerActiveLow ? HIGH : LOW);
+    }
+}
 
-
-int dhtTemp       = 24;      // DHT11 temperature
-int dhtHum        = 55;      // DHT11 humidity
-int szHum         = 55;      // SZ-HS100 analog humidity percent
-int szRawAdc      = 2200;    // SZ-HS100 raw ADC reading (0-4095)
-int humidityMode  = HUM_MODE_SZ_HS100; // Default active humidity mode
-
-// SZ-HS100 Calibration: 12-bit ADC (0-4095) mapped to 0-3.3V
-// Nominal probe: ~0.6V at 10% RH (~745 ADC) to ~3.0V at 90% RH (~3723 ADC)
-int szAdcMin      = 745;     // ADC value for minimum calibrated RH
-int szAdcMax      = 3723;    // ADC value for maximum calibrated RH
-int szRhMin       = 10;      // Calibrated minimum RH percentage
-int szRhMax       = 90;      // Calibrated maximum RH percentage
-
-unsigned long lastTransmitTime = 0;
-unsigned long lastSensorSample = 0;
-
-TCPClient tcpClient;
+void playSoftChirp(int durationMs) {
+    if (buzzerMuted || durationMs <= 0) return;
+    setBuzzer(true);
+    delay(durationMs);
+    setBuzzer(false);
+}
 
 // ----------------------------------------------------------------------------
-// ZERO-DEPENDENCY ROBUST DHT11 DRIVER (Fixed-point, no float)
+// ULTRASONIC SENSOR DRIVER (HC-SR04)
 // ----------------------------------------------------------------------------
-class DHT11Driver {
-private:
-    int _pin;
-    int _lastT;
-    int _lastH;
-public:
-    DHT11Driver(int pin) : _pin(pin), _lastT(24), _lastH(55) {}
+int pingOnce(int tPin, int ePin) {
+    digitalWrite(tPin, LOW);
+    delayMicroseconds(4);
+    digitalWrite(tPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(tPin, LOW);
 
-    void begin() {
-        pinMode(_pin, INPUT_PULLUP);
+    // Wait for Echo to rise (Timeout 6ms)
+    unsigned long t0 = micros();
+    while (digitalRead(ePin) == LOW) {
+        if (micros() - t0 > 6000) return 0;
     }
 
-    bool read(int &temp, int &hum) {
-        uint8_t data[5] = {0, 0, 0, 0, 0};
+    // Measure Echo HIGH duration (Timeout 25ms = ~430 cm)
+    unsigned long tStart = micros();
+    while (digitalRead(ePin) == HIGH) {
+        if (micros() - tStart > 25000) return 0;
+    }
+    unsigned long echoUs = micros() - tStart;
+    if (echoUs < 116) return 0;
+    return (int)(echoUs / 58UL);
+}
 
-        pinMode(_pin, OUTPUT);
-        digitalWrite(_pin, LOW);
-        delay(20);
+int getFilteredDistance() {
+    int sample = pingOnce(pinTrig, pinEcho);
+    if (sample >= 2 && sample <= 400) {
+        distHistory[distHistIdx] = sample;
+        distHistIdx = (distHistIdx + 1) % 3;
+    }
+    int a = distHistory[0], b = distHistory[1], c = distHistory[2];
+    int med = a;
+    if ((a <= b && b <= c) || (c <= b && b <= a)) med = b;
+    else if ((b <= a && a <= c) || (c <= a && a <= b)) med = a;
+    else med = c;
+    return med;
+}
 
-        digitalWrite(_pin, HIGH);
+// ----------------------------------------------------------------------------
+// DHT11 SENSOR DRIVER (Digital Pin D4)
+// ----------------------------------------------------------------------------
+bool readDHT(int &tOut, int &hOut) {
+    uint8_t data[5] = {0, 0, 0, 0, 0};
+
+    pinMode(PIN_DHT11, OUTPUT);
+    digitalWrite(PIN_DHT11, LOW);
+    delay(20);
+    digitalWrite(PIN_DHT11, HIGH);
+    delayMicroseconds(30);
+    pinMode(PIN_DHT11, INPUT_PULLUP);
+
+    noInterrupts();
+    unsigned long t = micros();
+    while (digitalRead(PIN_DHT11) == HIGH) { if (micros() - t > 120) { interrupts(); return false; } }
+    t = micros();
+    while (digitalRead(PIN_DHT11) == LOW)  { if (micros() - t > 120) { interrupts(); return false; } }
+    t = micros();
+    while (digitalRead(PIN_DHT11) == HIGH) { if (micros() - t > 120) { interrupts(); return false; } }
+
+    for (int i = 0; i < 40; i++) {
+        t = micros();
+        while (digitalRead(PIN_DHT11) == LOW)  { if (micros() - t > 120) { interrupts(); return false; } }
+        unsigned long bitStart = micros();
+        t = micros();
+        while (digitalRead(PIN_DHT11) == HIGH) { if (micros() - t > 150) { interrupts(); return false; } }
+        if (micros() - bitStart > 42) {
+            data[i / 8] |= (1 << (7 - (i % 8)));
+        }
+    }
+    interrupts();
+
+    if (((data[0] + data[1] + data[2] + data[3]) & 0xFF) != data[4]) return false;
+    if (data[0] == 0 && data[2] == 0) return false;
+
+    hOut = data[0];
+    tOut = data[2];
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// LM35 TEMPERATURE DRIVER (Analog Pin A2)
+// ----------------------------------------------------------------------------
+int readLM35() {
+    uint32_t sum = 0;
+    for (int i = 0; i < 16; i++) {
+        sum += analogRead(PIN_LM35_A2);
         delayMicroseconds(30);
-        pinMode(_pin, INPUT_PULLUP);
-
-        unsigned long tStart = micros();
-        while (digitalRead(_pin) == HIGH) {
-            if (micros() - tStart > 100) { temp = _lastT; hum = _lastH; return false; }
-        }
-
-        tStart = micros();
-        while (digitalRead(_pin) == LOW) {
-            if (micros() - tStart > 100) { temp = _lastT; hum = _lastH; return false; }
-        }
-
-        tStart = micros();
-        while (digitalRead(_pin) == HIGH) {
-            if (micros() - tStart > 100) { temp = _lastT; hum = _lastH; return false; }
-        }
-
-        noInterrupts();
-        for (int i = 0; i < 40; i++) {
-            tStart = micros();
-            while (digitalRead(_pin) == LOW) {
-                if (micros() - tStart > 100) { interrupts(); temp = _lastT; hum = _lastH; return false; }
-            }
-
-            unsigned long pulseStart = micros();
-            tStart = micros();
-            while (digitalRead(_pin) == HIGH) {
-                if (micros() - tStart > 150) { interrupts(); temp = _lastT; hum = _lastH; return false; }
-            }
-            unsigned long pulseLen = micros() - pulseStart;
-
-            if (pulseLen > 40) {
-                data[i / 8] |= (1 << (7 - (i % 8)));
-            }
-        }
-        interrupts();
-
-        uint8_t checksum = (data[0] + data[1] + data[2] + data[3]) & 0xFF;
-        if (checksum != data[4] || (data[0] == 0 && data[2] == 0)) {
-            temp = _lastT;
-            hum = _lastH;
-            return false;
-        }
-
-        hum  = data[0];
-        temp = data[2];
-        _lastT = temp;
-        _lastH = hum;
-        return true;
     }
-};
-
-DHT11Driver dht(PIN_DHT11);
-
-// ----------------------------------------------------------------------------
-// SZ-HS100 ANALOG HUMIDITY SENSOR DRIVER (12-bit ADC Oversampling & Mapping)
-// ----------------------------------------------------------------------------
-// Hardware Wiring Guide:
-// - VCC (Red):    Connect to Spark Core 3V3 (or 5V with 2/3 voltage divider to OUT)
-// - GND (Black):  Connect to Spark Core GND
-// - OUT (Green):  Connect to Spark Core Pin A0 (ADC 0-3.3V)
-//
-// Calibration Constants:
-// Default nominal range: 0.6V at 10% RH (~745 ADC) to 3.0V at 90% RH (~3723 ADC)
-int readSzHs100Humidity() {
-    uint32_t adcSum = 0;
-    // 10-sample oversampling to suppress high-frequency noise on analog rails
-    for (int i = 0; i < 10; i++) {
-        adcSum += analogRead(PIN_SZ_HS100);
-        delayMicroseconds(50);
-    }
-    szRawAdc = (int)(adcSum / 10);
-
-    // Linear interpolation from ADC counts to Relative Humidity percentage
-    long rh = map(szRawAdc, szAdcMin, szAdcMax, szRhMin, szRhMax);
-    if (rh < 0)   rh = 0;
-    if (rh > 100) rh = 100;
-    szHum = (int)rh;
-    return szHum;
+    rawA2 = (int)(sum / 16);
+    float mv = ((float)rawA2 * 3300.0f) / 4095.0f;
+    int c = (int)(mv / 10.0f + 0.5f);
+    if (c >= 2 && c <= 80) tempLm35 = c;
+    return tempLm35;
 }
 
 // ----------------------------------------------------------------------------
-// HC-SR04 ULTRASONIC SENSOR DRIVER (Integer cm)
+// POTENTIOMETER / ANALOG HUMIDITY (Pin A0)
 // ----------------------------------------------------------------------------
-// AUXILIARY & EXPANSION SENSORS STATE
-// ----------------------------------------------------------------------------
-int auxA3Val      = 0;       // 12-bit ADC (0-4095) for Pin A3 (e.g. MQ-2 Smoke/Gas or Sound)
-int auxA6Val      = 0;       // 12-bit ADC (0-4095) for Pin A6 (e.g. Soil Moisture or Analog Probe)
-int auxA7Val      = 0;       // 12-bit ADC (0-4095) for Pin A7 (e.g. Flame Sensor or Battery Monitor)
-int auxD3Val      = 0;       // Digital input state on free Pin D3
-int d7State       = 0;       // Actuator / Relay / Onboard Blue LED state on Pin D7 (0=OFF, 1=ON)
-int ultrasonicMode= 0;       // 0: D0=Echo/D1=Trig, 1: D0=Trig/D1=Echo
-
-// ----------------------------------------------------------------------------
-// HC-SR04 ULTRASONIC SENSOR DRIVER (Integer cm)
-// ----------------------------------------------------------------------------
-uint32_t pulseInWithTimeout(int pin, int value, unsigned long timeoutUs) {
-    unsigned long startWait = micros();
-    while (digitalRead(pin) == value) {
-        if (micros() - startWait > timeoutUs) return 0;
+int readPotHumidity() {
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; i++) {
+        sum += analogRead(PIN_POT_A0);
+        delayMicroseconds(20);
     }
-    while (digitalRead(pin) != value) {
-        if (micros() - startWait > timeoutUs) return 0;
-    }
-    unsigned long pulseStart = micros();
-    while (digitalRead(pin) == value) {
-        if (micros() - pulseStart > timeoutUs) return 0;
-    }
-    return micros() - pulseStart;
+    rawA0 = (int)(sum / 8);
+    int rh = (int)map(rawA0, 0, 4095, 10, 95);
+    if (rh < 5)  rh = 5;
+    if (rh > 99) rh = 99;
+    return rh;
 }
 
-void configureUltrasonicPins() {
+// ----------------------------------------------------------------------------
+// PIN CONFIGURATION & COMMAND HANDLER
+// ----------------------------------------------------------------------------
+void setUltrasonicMode(int mode) {
+    ultrasonicMode = mode;
+    if (ultrasonicMode == 0) {
+        pinTrig = D1; pinEcho = D0;
+    } else {
+        pinTrig = D0; pinEcho = D1;
+    }
     pinMode(pinTrig, OUTPUT);
     digitalWrite(pinTrig, LOW);
     pinMode(pinEcho, INPUT);
 }
 
-void swapUltrasonicPins() {
-    int temp = pinTrig;
-    pinTrig = pinEcho;
-    pinEcho = temp;
-    ultrasonicMode = (ultrasonicMode == 0) ? 1 : 0;
-    configureUltrasonicPins();
-}
-
-int readUltrasonicDistanceCm() {
-    digitalWrite(pinTrig, LOW);
-    delayMicroseconds(2);
-    digitalWrite(pinTrig, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(pinTrig, LOW);
-
-    unsigned long duration = pulseInWithTimeout(pinEcho, HIGH, 30000);
-    if (duration == 0) return 999;
-
-    // duration / 58 = cm
-    return (int)(duration / 58UL);
-}
-
-// ----------------------------------------------------------------------------
-// BUZZER & VISUAL ALERT INDICATION
-// ----------------------------------------------------------------------------
-void setAlertState(bool alertOn) {
-    digitalWrite(PIN_AUX_D7, alertOn ? HIGH : LOW);
-    d7State = alertOn ? 1 : 0;
-}
-
-void playBuzzerTone(int durationMs, int freqHz) {
-    if (freqHz <= 0 || durationMs <= 0) {
-        delay(durationMs);
-        return;
-    }
-    int halfPeriodUs = 1000000 / (freqHz * 2);
-    unsigned long cycles = ((unsigned long)durationMs * 1000UL) / (unsigned long)(halfPeriodUs * 2);
-
-    for (unsigned long i = 0; i < cycles; i++) {
-        digitalWrite(PIN_BUZZER, HIGH);
-        delayMicroseconds(halfPeriodUs);
-        digitalWrite(PIN_BUZZER, LOW);
-        delayMicroseconds(halfPeriodUs);
-    }
-}
-
-// Musical melodies instead of harsh buzzes
-void playMelodyAlert() {
-    // Dramatic minor arpeggio (A4 -> C5 -> E5 -> A5)
-    playBuzzerTone(60, 440);
-    delay(15);
-    playBuzzerTone(60, 523);
-    delay(15);
-    playBuzzerTone(60, 659);
-    delay(15);
-    playBuzzerTone(120, 880);
-}
-
-void playMelodyMotion() {
-    // Gentle 2-note musical chime (E5 -> B5)
-    playBuzzerTone(50, 659);
-    delay(15);
-    playBuzzerTone(90, 988);
-}
-
-void updateAlerts(bool alertTriggered, bool isProximity, bool isMotion) {
-    if (alertTriggered) {
-        setAlertState(true);
-        if (isProximity) {
-            playMelodyAlert();
-        } else if (isMotion && pirMonitoringEnabled) {
-            playMelodyMotion();
-        }
-    } else {
-        setAlertState(false);
-        digitalWrite(PIN_BUZZER, LOW);
-    }
-}
-
-// ----------------------------------------------------------------------------
-// THINGSPEAK CLOUD DISPATCHER
-// ----------------------------------------------------------------------------
-bool sendToThingSpeak(int temp, int hum, int dist, int motion, int light) {
-    if (!tcpClient.connect(THINGSPEAK_IP, THINGSPEAK_PORT)) {
-        return false;
-    }
-
-    char req[128];
-    snprintf(req, sizeof(req),
-        "GET /update?api_key=%s&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d HTTP/1.1\r\nHost: api.thingspeak.com\r\nConnection: close\r\n\r\n",
-        THINGSPEAK_KEY, temp, hum, dist, motion, light);
-    tcpClient.print(req);
-    tcpClient.flush();
-
-    unsigned long waitStart = millis();
-    while (millis() - waitStart < 1000) {
-        Particle.process();
-        while (tcpClient.available()) tcpClient.read();
-        if (!tcpClient.connected()) break;
-    }
-    tcpClient.stop();
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// REMOTE CLOUD COMMAND HANDLERS (Web Dashboard Interface)
-// ----------------------------------------------------------------------------
-int handleCloudCommand(String args) {
+int handleCommand(String args) {
     if (args.length() == 0) return -1;
     char c = args.charAt(0);
-    // Alarm & Visual controls
-    if (c == 't' || c == '1') { playMelodyAlert(); setAlertState(true); return 1; }
-    if (c == '0' || c == 'o') { digitalWrite(PIN_BUZZER, LOW); setAlertState(false); return 0; }
-    if (c == 'k')             { playMelodyMotion(); return 5; } // Gentle musical status motif
-    if (c == 'e' || c == 'l') { d7State = !d7State; digitalWrite(PIN_AUX_D7, d7State ? HIGH : LOW); return d7State ? 7 : 8; }
-    // Ultrasonic pin swap control: 'u' swaps D0/D1 between Trig and Echo dynamically
-    if (c == 'u')             { swapUltrasonicPins(); return ultrasonicMode == 0 ? 30 : 31; }
-    // Sensor mode controls: 's' or 'a' = SZ-HS100 analog, 'd' = DHT11 digital
-    if (c == 's' || c == 'a') { humidityMode = HUM_MODE_SZ_HS100; return 10; }
-    if (c == 'd')             { humidityMode = HUM_MODE_DHT11;    return 11; }
-    // PIR / D3 sensor controls:
-    // 'p' toggles D3 motion monitoring on/off
-    if (c == 'p')             { pirMonitoringEnabled = !pirMonitoringEnabled; return pirMonitoringEnabled ? 20 : 21; }
-    // 'i' toggles D3 trigger polarity (Active-LOW = 22, Active-HIGH = 23)
-    if (c == 'i')             { pirTriggerLevel = (pirTriggerLevel == LOW) ? HIGH : LOW; return (pirTriggerLevel == LOW) ? 22 : 23; }
+
+    if (c == 'm') {
+        buzzerMuted = !buzzerMuted;
+        setBuzzer(false);
+        return buzzerMuted ? 10 : 11;
+    }
+    if (c == 'u' || c == 's') {
+        setUltrasonicMode(ultrasonicMode == 0 ? 1 : 0);
+        return ultrasonicMode == 0 ? 30 : 31;
+    }
+    if (c == 'p') {
+        buzzerActiveLow = !buzzerActiveLow;
+        setBuzzer(false);
+        return buzzerActiveLow ? 40 : 41;
+    }
+    if (c == 't' || c == '1') {
+        playSoftChirp(40);
+        return 1;
+    }
+    if (c == '0' || c == 'o') {
+        setBuzzer(false);
+        digitalWrite(PIN_LED_D7, LOW);
+        return 0;
+    }
     return -1;
 }
 
@@ -373,50 +240,36 @@ int handleCloudCommand(String args) {
 // SETUP
 // ----------------------------------------------------------------------------
 void setup() {
+    // 1. Buzzer Silent on Boot
     pinMode(PIN_BUZZER, OUTPUT);
-    digitalWrite(PIN_BUZZER, LOW);
+    setBuzzer(false);
 
-    // Free Pin D7: Onboard Blue LED / Auxiliary Relay output
-    pinMode(PIN_AUX_D7, OUTPUT);
-    digitalWrite(PIN_AUX_D7, LOW);
+    // 2. Onboard Blue LED (D7)
+    pinMode(PIN_LED_D7, OUTPUT);
+    digitalWrite(PIN_LED_D7, LOW);
 
-    // Ultrasonic Sonar pins (D0=Echo, D1=Trig)
-    configureUltrasonicPins();
+    // 3. Inputs
+    pinMode(PIN_SW1,    INPUT_PULLUP);
+    pinMode(PIN_IR_D6,  INPUT_PULLUP);
+    pinMode(PIN_DHT11,  INPUT_PULLUP);
+    pinMode(PIN_POT_A0, INPUT);
+    pinMode(PIN_LM35_A2, INPUT);
+    // Pin A1 is intentionally excluded from firmware
 
-    // Shield Push Buttons (Active-LOW with internal pullups)
-    pinMode(PIN_KEY1, INPUT_PULLUP);
-    pinMode(PIN_KEY2, INPUT_PULLUP);
+    // 4. Ultrasonic Sonar
+    setUltrasonicMode(0);
 
-    // Free Pin D3: Configure with internal pull-up resistor.
-    // When no sensor is attached or dry-contact is open, reads HIGH.
-    // Motion sensor, flame sensor, or door contact shorts to GND on trigger (Active-LOW).
-    pinMode(PIN_FREE_D3, INPUT_PULLUP);
+    // 5. Short 25ms soft chirp on boot
+    playSoftChirp(25);
 
-    // Analog Sensor Inputs
-    pinMode(PIN_LDR, INPUT);
-    pinMode(PIN_SZ_HS100, INPUT); // Analog Pin A0 ADC
-    pinMode(PIN_LM35, INPUT);     // Analog Pin A2 ADC
-    pinMode(PIN_AUX_A3, INPUT);   // Free Analog Pin A3 ADC
-    pinMode(PIN_AUX_A6, INPUT);   // Free Analog Pin A6 ADC
-    pinMode(PIN_AUX_A7, INPUT);   // Free Analog Pin A7 ADC
-
-    dht.begin();
-
-    // Particle Cloud Telemetry Variables
-    Particle.variable("temp", currentTemp);
-    Particle.variable("hum", currentHum);
-    Particle.variable("dist", currentDist);
+    // 6. Register Exactly 4 Particle Cloud Variables (Spark Core standard limit)
+    Particle.variable("temp",   currentTemp);
+    Particle.variable("hum",    currentHum);
+    Particle.variable("dist",   currentDist);
     Particle.variable("motion", currentMotion);
-    Particle.variable("szHum", szHum);
-    Particle.variable("light", currentLight);
-    Particle.variable("auxA3", auxA3Val);
-    Particle.variable("auxA6", auxA6Val);
-    Particle.variable("auxA7", auxA7Val);
-    Particle.variable("d7State", d7State);
 
-    // Register remote cloud control functions
-    Particle.function("alarm", handleCloudCommand);
-    Particle.function("cmd", handleCloudCommand);
+    // 7. Register Cloud Command Function
+    Particle.function("alarm", handleCommand);
 }
 
 // ----------------------------------------------------------------------------
@@ -426,71 +279,83 @@ void loop() {
     Particle.process();
     unsigned long now = millis();
 
-    // Check physical buttons on 9-in-1 shield
-    if (digitalRead(PIN_KEY1) == LOW) {
-        // Key 1 pressed: Silence buzzer & deactivate alert
-        digitalWrite(PIN_BUZZER, LOW);
-        setAlertState(false);
-        delay(150); // Debounce
-    }
-    if (digitalRead(PIN_KEY2) == LOW) {
-        // Key 2 pressed: Toggle humidity source mode (DHT11 <-> SZ-HS100)
-        humidityMode = (humidityMode == HUM_MODE_SZ_HS100) ? HUM_MODE_DHT11 : HUM_MODE_SZ_HS100;
-        playMelodyMotion();
-        delay(250); // Debounce
+    // Hardware Mute Button SW1 (Pin D2)
+    if (digitalRead(PIN_SW1) == LOW) {
+        buzzerMuted = true;
+        setBuzzer(false);
+        digitalWrite(PIN_LED_D7, LOW);
+        delay(120);
     }
 
-    if (now - lastSensorSample >= 250) {
-        lastSensorSample = now;
+    // Slow Sensor Cycle (DHT11 & LM35 read every 2.5s)
+    if (now - lastDhtTime >= DHT_SAMPLE_MS) {
+        lastDhtTime = now;
 
-        // Sample Free Pin D3 (e.g. PIR motion, gas DO, or door magnetic switch)
-        auxD3Val = digitalRead(PIN_FREE_D3);
-        bool isMotionTriggered = (auxD3Val == pirTriggerLevel);
-        if (isMotionTriggered && pirMonitoringEnabled) {
-            if (pirFilterCounter < 4) pirFilterCounter++;
+        int t = 0, h = 0;
+        if (readDHT(t, h)) {
+            tempDht = t;
+            humDht  = h;
+            dhtOk   = 1;
         } else {
-            if (pirFilterCounter > 0) pirFilterCounter--;
-        }
-        // Require at least 3 consecutive positive samples (750ms) to confirm motion
-        currentMotion = (pirMonitoringEnabled && pirFilterCounter >= 3) ? 1 : 0;
-
-        // Sample Ultrasonic Sonar & Analog Sensors
-        currentDist   = readUltrasonicDistanceCm();
-        currentLight  = analogRead(PIN_LDR);
-
-        // Auxiliary expansion analog pins
-        auxA3Val      = analogRead(PIN_AUX_A3);
-        auxA6Val      = analogRead(PIN_AUX_A6);
-        auxA7Val      = analogRead(PIN_AUX_A7);
-
-        // 1. Read DHT11 Digital Sensor (Temp + Humidity)
-        dht.read(dhtTemp, dhtHum);
-        currentTemp = dhtTemp;
-
-        // 2. Read SZ-HS100 Analog Humidity Sensor (Pin A0)
-        readSzHs100Humidity();
-
-        // 3. Select Active Humidity based on configured mode
-        if (humidityMode == HUM_MODE_SZ_HS100) {
-            currentHum = szHum;
-        } else {
-            currentHum = dhtHum;
+            dhtOk   = 0;
         }
 
-        bool proxAlert = (currentDist > 0 && currentDist < PROXIMITY_THRESHOLD);
-        bool motAlert  = (currentMotion == 1);
-        isAlert        = (proxAlert || motAlert) ? 1 : 0;
+        readLM35();
 
-        updateAlerts(isAlert == 1, proxAlert, motAlert);
+        // Primary Temperature Selection
+        if (dhtOk == 1 && tempDht >= 5 && tempDht <= 60) {
+            currentTemp = tempDht;
+        } else if (tempLm35 >= 5 && tempLm35 <= 75) {
+            currentTemp = tempLm35;
+        }
+
+        // Primary Humidity Selection
+        if (dhtOk == 1 && humDht >= 10 && humDht <= 95) {
+            currentHum = humDht;
+        } else {
+            currentHum = readPotHumidity();
+        }
     }
 
-    if (now - lastTransmitTime >= TRANSMIT_INTERVAL_MS) {
-        lastTransmitTime = now;
+    // Fast Sensor Cycle (Ultrasonic & IR read every 100ms)
+    if (now - lastFastLoopTime >= 100) {
+        lastFastLoopTime = now;
 
-        sendToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight);
+        currentDist = getFilteredDistance();
 
-        char payload[64];
-        snprintf(payload, sizeof(payload), "%d,%d,%d,%d,%d,%d", currentTemp, currentHum, currentDist, currentMotion, szHum, auxA3Val);
+        // IR Obstacle Sensor (Active-LOW on D6)
+        if (digitalRead(PIN_IR_D6) == LOW) {
+            if (irFilterCount < 3) irFilterCount++;
+        } else {
+            if (irFilterCount > 0) irFilterCount--;
+        }
+        currentMotion = (irFilterCount >= 2) ? 1 : 0;
+
+        // Alert Condition: Distance < 40 cm OR IR detected
+        bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_THRESHOLD_CM);
+        bool irBreach   = (currentMotion == 1);
+        bool breach     = (proxBreach || irBreach);
+
+        if (breach) {
+            digitalWrite(PIN_LED_D7, (now % 300 < 150) ? HIGH : LOW);
+            // Calm, non-annoying pulse spaced 2.2 seconds apart
+            if (now - lastChirpTime >= 2200) {
+                lastChirpTime = now;
+                playSoftChirp(35);
+            }
+        } else {
+            digitalWrite(PIN_LED_D7, LOW);
+            setBuzzer(false);
+            buzzerMuted = false;
+        }
+    }
+
+    // Telemetry Broadcast every 20s
+    if (now - lastPublishTime >= TELEMETRY_MS) {
+        lastPublishTime = now;
+        char payload[40];
+        snprintf(payload, sizeof(payload), "%d,%d,%d,%d,%d,%d",
+                 currentTemp, currentHum, currentDist, currentMotion, tempLm35, dhtOk);
         Particle.publish("smartroom", payload, PRIVATE);
     }
 }
