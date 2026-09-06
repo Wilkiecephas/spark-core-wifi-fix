@@ -9,7 +9,7 @@
  * - 9-in-1 Multifunctional Expansion Shield (DHT11, Buzzer, RGB LED, LDR)
  * - SZ-HS100 Analog Humidity Sensor (Analog Pin A0, 0-3.3V ADC)
  * - HC-SR04 Ultrasonic Distance Sensor
- * - HC-SR501 PIR Motion Sensor
+ * - 12V PIR Motion Sensor / HC-SR501 (Digital Pin D3, INPUT_PULLUP Dry Contact)
  *
  * Cloud Target:
  * - ThingSpeak Channel ID: 3475948 (Write API Key: 2W20O13FTT3CIUD3)
@@ -36,14 +36,14 @@ const int PIN_LDR         = A1;   // Shield A1: LDR Light Sensor (0-4095 ADC)
 
 const int PIN_TRIG        = D0;   // HC-SR04 Trigger (3.3V Output -> TTL compatible)
 const int PIN_ECHO        = D1;   // HC-SR04 Echo (5V tolerant Input)
-const int PIN_PIR         = D3;   // HC-SR501 PIR Motion Output (5V tolerant Input)
+// PIR Motion Sensor Pin (Configured with internal pullup for 12V dry contact closed-circuit trigger)
+const int PIN_PIR         = D3;   // Shield D3: PIR Motion (INPUT_PULLUP, Active-LOW)
 
 // ----------------------------------------------------------------------------
 // CLOUD CONFIGURATION
 // ----------------------------------------------------------------------------
 const char* THINGSPEAK_KEY  = "2W20O13FTT3CIUD3";
-const char* THINGSPEAK_HOST = "api.thingspeak.com";
-IPAddress   THINGSPEAK_IP(44, 213, 137, 49); // Direct IP fallback
+IPAddress   THINGSPEAK_IP(44, 213, 137, 49); // Direct IP
 const int   THINGSPEAK_PORT = 80;
 
 const unsigned long TRANSMIT_INTERVAL_MS = 20000; // 20s
@@ -67,6 +67,10 @@ int currentDist   = 150;     // cm
 int currentMotion = 0;       // 0 or 1
 int currentLight  = 0;       // 0-4095
 int isAlert       = 0;       // 0 or 1
+int pirFilterCounter = 0;    // Anti-chatter filter for PIR contact
+bool pirMonitoringEnabled = true; // Enabled by default; INPUT_PULLUP prevents floating false-alarms
+int pirTriggerLevel = LOW;   // 12V PIR dry-contact closes circuit to GND on motion (Active-LOW: LOW=Motion)
+
 
 int dhtTemp       = 24;      // DHT11 temperature
 int dhtHum        = 55;      // DHT11 humidity
@@ -232,7 +236,11 @@ void setRgbColor(bool red, bool green, bool blue) {
     digitalWrite(PIN_RGB_BLUE,  blue ? HIGH : LOW);
 }
 
-void triggerBuzzerSound(int durationMs, int freqHz) {
+void playBuzzerTone(int durationMs, int freqHz) {
+    if (freqHz <= 0 || durationMs <= 0) {
+        delay(durationMs);
+        return;
+    }
     int halfPeriodUs = 1000000 / (freqHz * 2);
     unsigned long cycles = ((unsigned long)durationMs * 1000UL) / (unsigned long)(halfPeriodUs * 2);
 
@@ -244,14 +252,33 @@ void triggerBuzzerSound(int durationMs, int freqHz) {
     }
 }
 
+// Musical melodies instead of harsh buzzes
+void playMelodyAlert() {
+    // Dramatic minor arpeggio (A4 -> C5 -> E5 -> A5)
+    playBuzzerTone(60, 440);
+    delay(15);
+    playBuzzerTone(60, 523);
+    delay(15);
+    playBuzzerTone(60, 659);
+    delay(15);
+    playBuzzerTone(120, 880);
+}
+
+void playMelodyMotion() {
+    // Gentle 2-note musical chime (E5 -> B5)
+    playBuzzerTone(50, 659);
+    delay(15);
+    playBuzzerTone(90, 988);
+}
+
 void updateAlerts(bool alertTriggered, bool isProximity, bool isMotion) {
     if (alertTriggered) {
         if (isProximity) {
             setRgbColor(true, false, false); // Red
-            triggerBuzzerSound(100, 2400);
-        } else if (isMotion) {
+            playMelodyAlert();
+        } else if (isMotion && pirMonitoringEnabled) {
             setRgbColor(false, false, true); // Blue
-            triggerBuzzerSound(60, 1800);
+            playMelodyMotion();
         }
     } else {
         setRgbColor(false, true, false);     // Green
@@ -267,18 +294,15 @@ bool sendToThingSpeak(int temp, int hum, int dist, int motion, int light) {
         return false;
     }
 
-    tcpClient.print("GET /update?api_key=");
-    tcpClient.print(THINGSPEAK_KEY);
-    tcpClient.print("&field1="); tcpClient.print(temp);
-    tcpClient.print("&field2="); tcpClient.print(hum);
-    tcpClient.print("&field3="); tcpClient.print(dist);
-    tcpClient.print("&field4="); tcpClient.print(motion);
-    tcpClient.print("&field5="); tcpClient.print(light);
-    tcpClient.println(" HTTP/1.1\r\nHost: api.thingspeak.com\r\nConnection: close\r\n");
+    char req[128];
+    snprintf(req, sizeof(req),
+        "GET /update?api_key=%s&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d HTTP/1.1\r\nHost: api.thingspeak.com\r\nConnection: close\r\n\r\n",
+        THINGSPEAK_KEY, temp, hum, dist, motion, light);
+    tcpClient.print(req);
     tcpClient.flush();
 
     unsigned long waitStart = millis();
-    while (millis() - waitStart < 1500) {
+    while (millis() - waitStart < 1000) {
         Particle.process();
         while (tcpClient.available()) tcpClient.read();
         if (!tcpClient.connected()) break;
@@ -294,14 +318,20 @@ int handleCloudCommand(String args) {
     if (args.length() == 0) return -1;
     char c = args.charAt(0);
     // Alarm & Visual controls
-    if (c == 't' || c == '1') { triggerBuzzerSound(300, 2400); return 1; }
+    if (c == 't' || c == '1') { playMelodyAlert(); return 1; }
     if (c == '0' || c == 'o') { digitalWrite(PIN_BUZZER, LOW); setRgbColor(false, true, false); return 0; }
+    if (c == 'k')             { playMelodyMotion(); return 5; } // Gentle musical status motif
     if (c == 'r') { setRgbColor(true, false, false); return 2; }
     if (c == 'g') { setRgbColor(false, true, false); return 3; }
     if (c == 'b') { setRgbColor(false, false, true);  return 4; }
     // Sensor mode controls: 's' or 'a' = SZ-HS100 analog, 'd' = DHT11 digital
     if (c == 's' || c == 'a') { humidityMode = HUM_MODE_SZ_HS100; return 10; }
     if (c == 'd')             { humidityMode = HUM_MODE_DHT11;    return 11; }
+    // PIR sensor controls:
+    // 'p' toggles PIR monitoring on/off
+    if (c == 'p')             { pirMonitoringEnabled = !pirMonitoringEnabled; return pirMonitoringEnabled ? 20 : 21; }
+    // 'i' toggles PIR trigger polarity (Active-LOW = 22, Active-HIGH = 23)
+    if (c == 'i')             { pirTriggerLevel = (pirTriggerLevel == LOW) ? HIGH : LOW; return (pirTriggerLevel == LOW) ? 22 : 23; }
     return -1;
 }
 
@@ -309,8 +339,6 @@ int handleCloudCommand(String args) {
 // SETUP
 // ----------------------------------------------------------------------------
 void setup() {
-    Serial.begin(115200);
-
     pinMode(PIN_BUZZER, OUTPUT);
     digitalWrite(PIN_BUZZER, LOW);
 
@@ -323,7 +351,10 @@ void setup() {
     digitalWrite(PIN_TRIG, LOW);
     pinMode(PIN_ECHO, INPUT);
 
-    pinMode(PIN_PIR, INPUT);
+    // Configure PIN_PIR with internal pull-up resistor.
+    // Floating/Open contact stays HIGH (3.3V, idle/no-motion).
+    // When 12V PIR triggers, closed contact shorts D3 to GND (reads LOW).
+    pinMode(PIN_PIR, INPUT_PULLUP);
     pinMode(PIN_LDR, INPUT);
     pinMode(PIN_SZ_HS100, INPUT); // Analog Pin A0 ADC
 
@@ -339,8 +370,6 @@ void setup() {
     // Register remote cloud control functions
     Particle.function("alarm", handleCloudCommand);
     Particle.function("cmd", handleCloudCommand);
-
-    Serial.println("SmartRoom Ready");
 }
 
 // ----------------------------------------------------------------------------
@@ -353,7 +382,17 @@ void loop() {
     if (now - lastSensorSample >= 250) {
         lastSensorSample = now;
 
-        currentMotion = digitalRead(PIN_PIR);
+        // Debounce / filter PIR motion to eliminate contact bounce and transient RF spikes
+        int rawPir = digitalRead(PIN_PIR);
+        bool isMotionTriggered = (rawPir == pirTriggerLevel);
+        if (isMotionTriggered && pirMonitoringEnabled) {
+            if (pirFilterCounter < 4) pirFilterCounter++;
+        } else {
+            if (pirFilterCounter > 0) pirFilterCounter--;
+        }
+        // Require at least 3 consecutive positive samples (750ms) to confirm motion
+        currentMotion = (pirMonitoringEnabled && pirFilterCounter >= 3) ? 1 : 0;
+
         currentDist   = readUltrasonicDistanceCm();
         currentLight  = analogRead(PIN_LDR);
 
@@ -381,15 +420,9 @@ void loop() {
     if (now - lastTransmitTime >= TRANSMIT_INTERVAL_MS) {
         lastTransmitTime = now;
 
-        Serial.print("T:"); Serial.print(currentTemp);
-        Serial.print(" H:"); Serial.print(currentHum);
-        Serial.print(" SZ:"); Serial.print(szHum);
-        Serial.print(" D:"); Serial.print(currentDist);
-        Serial.print(" M:"); Serial.println(currentMotion);
-
         sendToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight);
 
-        char payload[40];
+        char payload[32];
         snprintf(payload, sizeof(payload), "%d,%d,%d,%d,%d", currentTemp, currentHum, currentDist, currentMotion, szHum);
         Particle.publish("smartroom", payload, PRIVATE);
     }
