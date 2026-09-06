@@ -79,6 +79,7 @@ int valAuxA4      = 0;
 int lastReportedPot   = 2048;
 int lastReportedLdr   = 800;
 int lastMotionState   = 0;
+int irFilterCount     = 0; // Integrating filter for IR intrusion detection (eliminates noise chatter)
 
 bool buzzerMuted      = false;
 bool forceLightOn     = false;
@@ -492,29 +493,27 @@ void loop() {
         currentLight = analogRead(PIN_LDR_A1);
 
         // Detect dynamic user interaction on sensors:
-        // 1. IR receiver trigger (Active-LOW on D6)
-        bool irDetected = (digitalRead(PIN_IR_D6) == LOW);
+        // 1. IR Intrusion Detector (Integrating filter: rejects ambient chatter, triggers on sustained beam interruption)
+        if (digitalRead(PIN_IR_D6) == LOW) {
+            if (irFilterCount < 4) irFilterCount++;
+        } else {
+            if (irFilterCount > 0) irFilterCount--;
+        }
+        bool irIntrusion = (irFilterCount >= 3); // Requires sustained beam break (300ms) to trigger
 
         // 2. PIR motion sensor (Active-LOW on D3)
         bool pirDetected = (digitalRead(PIN_PIR_D3) == LOW);
 
-        // 3. Rotation sensor interaction (User turned the potentiometer knob by > 65 counts)
+        // 3. Rotation sensor interaction (User turned the potentiometer knob by > 80 counts)
         int potDelta = abs(currentPot - lastReportedPot);
-        bool rotationDetected = (potDelta > 65);
+        bool rotationDetected = (potDelta > 80);
         if (rotationDetected) {
             lastReportedPot = currentPot;
         }
 
-        // 4. LDR hand wave / shadow detection (Sudden light change > 160 counts)
-        int ldrDelta = abs(currentLight - lastReportedLdr);
-        bool ldrWaveDetected = (ldrDelta > 160);
-        if (ldrWaveDetected) {
-            lastReportedLdr = currentLight;
-        }
-
-        // Combine into unified motion & gesture detection
-        bool rawGestureTrigger = (irDetected || pirDetected || rotationDetected || ldrWaveDetected);
-        if (rawGestureTrigger) {
+        // Clean intrusion & interaction trigger (No noisy LDR false alarms)
+        bool rawIntrusionTrigger = (irIntrusion || pirDetected || rotationDetected);
+        if (rawIntrusionTrigger) {
             motionHoldUntil = now + MOTION_HOLD_MS; // 1.8s latch
         }
         bool isMotionActive = (now < motionHoldUntil);
@@ -583,10 +582,9 @@ void loop() {
         if (redLit)            mask |= 16;  // Bit 4: Red (Alarm) Lit
         if (greenLit)          mask |= 32;  // Bit 5: Green (Safe) Lit
         if (blueLit)           mask |= 64;  // Bit 6: Blue (Motion) Lit
-        if (irDetected)        mask |= 128; // Bit 7: IR Sensor Triggered
+        if (irIntrusion)       mask |= 128; // Bit 7: IR Intrusion Triggered
         if (pirDetected)       mask |= 256; // Bit 8: PIR Triggered
         if (rotationDetected)  mask |= 512; // Bit 9: Potentiometer Rotation Detected
-        if (ldrWaveDetected)   mask |= 1024;// Bit 10: LDR Hand Shadow Detected
 
         // Pack 10-bit scaled Light (0-1023) into bits 11-20
         int light10 = (currentLight >> 2) & 0x3FF;
