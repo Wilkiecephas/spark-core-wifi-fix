@@ -2,126 +2,261 @@
  * ============================================================================
  * SMART ROOM MONITORING SYSTEM (SPARK CORE NATIVE) - CALIBRATED & STABILIZED
  * ============================================================================
- * Pin Mapping:
- * - D0 & D1   -> HC-SR04 Ultrasonic Sonar (D1=Trig, D0=Echo; reverse via cloud)
- * - D2 (SW1)  -> Push Button SW1 (Active-LOW: Mutes buzzer / clears alert)
- * - D4        -> DHT11 Digital Temperature & Humidity Sensor (Read every 2.5s)
- * - D5        -> Active Buzzer (Direct logic drive; quiet & calm, no screeching)
- * - D6        -> Infrared (IR) Obstacle / Proximity Sensor (Active-LOW)
- * - D7        -> Spark Core Onboard Blue LED (Alert visual indicator)
- * - A0        -> Rotary Potentiometer / Secondary Humidity (0-3.3V ADC)
- * - A1        -> UNUSED (Completely removed to eliminate 5V rail interference)
- * - A2        -> LM35 Precision Analog Temperature Sensor (10mV/°C)
+ * Hardware Wiring:
+ * - D0 <-> HC-SR04 TRIG / ECHO (Auto-detected & cloud-swappable)
+ * - D1 <-> HC-SR04 ECHO / TRIG (Auto-detected & cloud-swappable)
+ * - D2 <-> Push Button SW1 (Active-LOW: Mute / Silence)
+ * - D3 <-> External PIR / Shield Key2 (INPUT_PULLUP, Active-LOW)
+ * - D4 <-> DHT11 Digital Temperature & Humidity Sensor
+ * - D5 <-> Shield Buzzer (Melodic audio engine)
+ * - D6 <-> Shield IR Receiver (Active-LOW)
+ * - D7 <-> Spark Core Onboard Blue LED (Running heartbeat indicator)
+ * 
+ * Analog & Actuator Wiring:
+ * - A0 <-> 9-in-1 Shield A0 (Rotary Potentiometer, 0-4095 ADC)
+ * - A1 <-> 9-in-1 Shield A1 (LDR Light Sensor, 0-4095 ADC)
+ * - A2 <-> 9-in-1 Shield A2 (LM35 Precision Temperature, 10mV/°C)
+ * - A3 <-> 9-in-1 Shield A3 (Auxiliary Analog 1, 0-4095 ADC)
+ * - A4 <-> 9-in-1 Shield A4 (Auxiliary Analog 2, 0-4095 ADC)
+ * - A5 <-> 9-in-1 Shield D9  (RGB Red LED)
+ * - A6 <-> 9-in-1 Shield D10 (RGB Green LED)
+ * - A7 <-> 9-in-1 Shield D11 (RGB Blue LED)
+ * 
+ * Onboard RGB LED (RGB.control):
+ * - GREEN: Room Secure & Normal Running
+ * - BLUE:  Motion / IR / Rotation / Hand Shadow Detected
+ * - RED:   Proximity Breach (< 20 cm)
  * ============================================================================
  */
 
 #include "application.h"
 
-// Hardware Pin Definitions
-int pinTrig             = D1;   // Default Trig (Auto-tested / cloud-swappable)
-int pinEcho             = D0;   // Default Echo
-const int PIN_SW1       = D2;   // SW1 Button (Mute)
-const int PIN_DHT11     = D4;   // DHT11 Sensor Data
-const int PIN_BUZZER    = D5;   // Active Buzzer on Shield
-const int PIN_IR_D6     = D6;   // IR Obstacle Sensor
-const int PIN_LED_D7    = D7;   // Spark Core Onboard Blue LED
+// ----------------------------------------------------------------------------
+// PIN ASSIGNMENTS
+// ----------------------------------------------------------------------------
+int pinTrig               = D0;   // Confirmed D0 Trig
+int pinEcho               = D1;   // Confirmed D1 Echo
+const int PIN_SW1         = D2;   // Push Button SW1 (Mute)
+const int PIN_PIR_D3      = D3;   // PIR Motion Sensor / Key2
+const int PIN_DHT11       = D4;   // DHT11 Data
+const int PIN_BUZZER      = D5;   // Buzzer Pin
+const int PIN_IR_D6       = D6;   // IR Receiver
+const int PIN_LED_D7      = D7;   // Spark Core Onboard Blue LED
 
-const int PIN_POT_A0    = A0;   // Shield Potentiometer
-const int PIN_LM35_A2   = A2;   // LM35 Analog Temperature Sensor
+// Analog Sensor Inputs (A0-A4)
+const int PIN_POT_A0      = A0;   // Rotary Potentiometer
+const int PIN_LDR_A1      = A1;   // LDR Light Sensor
+const int PIN_LM35_A2     = A2;   // LM35 Temperature Sensor
+const int PIN_AUX_A3      = A3;   // Aux Analog 1
+const int PIN_AUX_A4      = A4;   // Aux Analog 2
 
-// Thresholds
-const int PROXIMITY_THRESHOLD_CM = 40;   // Alert threshold (< 40 cm)
-const unsigned long DHT_SAMPLE_MS = 2500; // DHT11 sample interval (2.5s)
-const unsigned long TELEMETRY_MS  = 20000; // Particle publish interval (20s)
+// External RGB LED Outputs (A5-A7)
+const int PIN_RGB_RED     = A5;   // Red LED
+const int PIN_RGB_GREEN   = A6;   // Green LED
+const int PIN_RGB_BLUE    = A7;   // Blue LED
 
-// State Variables (Spark Core supports max 4 variables reliably)
-int currentDist   = 120;   // Distance in cm
-int currentTemp   = 24;    // Temperature in deg C
-int currentHum    = 50;    // Humidity in % RH
-int currentMotion = 0;     // 0=Clear, 1=Object close to IR sensor
+// Timing & Thresholds (Ultrasonic proximity threshold changed to 20 cm)
+const int PROXIMITY_ALERT_CM   = 20;    // Alert if obstacle < 20 cm (per user request)
+const unsigned long DHT_SAMPLE_MS     = 2500;  // DHT11 sample interval (2.5s)
+const unsigned long FAST_LOOP_MS      = 100;   // Fast loop (100ms - ultra-responsive)
+const unsigned long TELEMETRY_MS      = 10000; // Cloud publish interval (10s)
+const unsigned long MOTION_HOLD_MS    = 1800;  // 1.8s hold for crisp, snappy motion triggers
 
-// Internal Diagnostics
-int tempDht       = 0;
-int humDht        = 0;
-int tempLm35      = 24;
-int rawA2         = 0;
-int rawA0         = 0;
-int dhtOk         = 0;
-int ultrasonicMode= 0;     // 0: D1=Trig, D0=Echo; 1: D0=Trig, D1=Echo
+// State Variables (Published to Particle Cloud)
+int currentDist   = 150;   // Distance in cm
+int currentTemp   = 25;    // Temperature in °C
+int currentHum    = 50;    // Relative Humidity (% RH)
+int currentMotion = 32;    // Bitmask of active triggers & LED states (Green = 32)
+int currentLight  = 800;   // LDR Light Sensor reading (0-4095)
+int currentPot    = 2048;  // Rotary Potentiometer reading (0-4095)
+
+// Auxiliary Analog Channels
+int valLm35Temp   = 25;
+int valAuxA3      = 0;
+int valAuxA4      = 0;
+
+// Dynamic Sensitivity Tracking
+int lastReportedPot   = 2048;
+int lastReportedLdr   = 800;
+int lastMotionState   = 0;
 
 bool buzzerMuted      = false;
-bool buzzerActiveLow  = true;  // 9-in-1 active buzzer: LOW=On, HIGH=Off
+bool forceLightOn     = false;
+bool forceAlarmOn     = false;
+unsigned long motionHoldUntil   = 0;
+unsigned long lastFastLoopTime  = 0;
+unsigned long lastDhtTime       = 0;
+unsigned long lastAlarmToneTime = 0;
+unsigned long lastPublishTime   = 0;
 
-unsigned long lastFastLoopTime = 0;
-unsigned long lastDhtTime      = 0;
-unsigned long lastChirpTime    = 0;
-unsigned long lastPublishTime  = 0;
-int  irFilterCount     = 0;
-int  distHistory[3]    = {120, 120, 120};
-int  distHistIdx       = 0;
+// Filter history for distance (3 samples)
+int distHistory[3] = {150, 150, 150};
+int distHistIdx    = 0;
 
 // ----------------------------------------------------------------------------
-// BUZZER CONTROL (Quiet & Gentle, No Screeching)
+// BUZZER MELODIC AUDIO ENGINE
 // ----------------------------------------------------------------------------
-void setBuzzer(bool on) {
-    if (on && !buzzerMuted) {
-        digitalWrite(PIN_BUZZER, buzzerActiveLow ? LOW : HIGH);
-    } else {
-        digitalWrite(PIN_BUZZER, buzzerActiveLow ? HIGH : LOW);
+void playTone(int durationMs, int freqHz = 2000) {
+    if (buzzerMuted || durationMs <= 0 || freqHz <= 0) return;
+    int halfPeriodUs = 1000000 / (freqHz * 2);
+    unsigned long cycles = ((unsigned long)durationMs * 1000UL) / (unsigned long)(halfPeriodUs * 2);
+
+    for (unsigned long i = 0; i < cycles; i++) {
+        digitalWrite(PIN_BUZZER, HIGH);
+        delayMicroseconds(halfPeriodUs);
+        digitalWrite(PIN_BUZZER, LOW);
+        delayMicroseconds(halfPeriodUs);
     }
 }
 
-void playSoftChirp(int durationMs) {
-    if (buzzerMuted || durationMs <= 0) return;
-    setBuzzer(true);
-    delay(durationMs);
-    setBuzzer(false);
+void buzzerOff() {
+    digitalWrite(PIN_BUZZER, LOW);
+}
+
+// 1. Boot / Welcome Melody (Upbeat ascending triad: C5 -> E5 -> G5 -> C6)
+void playWelcomeChime() {
+    if (buzzerMuted) return;
+    playTone(45, 523);
+    delay(15);
+    playTone(45, 659);
+    delay(15);
+    playTone(45, 784);
+    delay(15);
+    playTone(90, 1047);
+    buzzerOff();
+}
+
+// 2. Motion / Notification Melody (Pleasant 2-note chime: E5 -> B5)
+void playMelodyMotion() {
+    if (buzzerMuted) return;
+    playTone(45, 659);
+    delay(15);
+    playTone(85, 988);
+    buzzerOff();
+}
+
+// 3. Proximity Alarm Siren (< 20cm: Urgent warble)
+void playIntrusionAlarm() {
+    if (buzzerMuted) return;
+    playTone(60, 880);  // A5
+    delay(20);
+    playTone(60, 698);  // F5
+    delay(20);
+    playTone(80, 880);  // A5
+    buzzerOff();
+}
+
+// 4. Safe State Restored Melody (Gentle resolving motif: G5 -> C6)
+void playMelodySafe() {
+    if (buzzerMuted) return;
+    playTone(35, 784);
+    delay(15);
+    playTone(65, 1047);
+    buzzerOff();
 }
 
 // ----------------------------------------------------------------------------
-// ULTRASONIC SENSOR DRIVER (HC-SR04)
+// LED CONTROLLER: ONBOARD RGB LED + D7 RUNNING BLINK + SHIELD RGB
 // ----------------------------------------------------------------------------
-int pingOnce(int tPin, int ePin) {
+void updateLeds(bool isRed, bool isGreen, bool isBlue, bool d7Blink) {
+    // 1. Spark Core Onboard RGB LED (RGB.control)
+    if (isRed) {
+        RGB.color(255, 0, 0);     // Brilliant RED for Alarm (< 20cm)
+    } else if (isBlue) {
+        RGB.color(0, 160, 255);   // Electric BLUE for Motion / Sensors
+    } else if (isGreen) {
+        RGB.color(0, 255, 0);     // Vibrant GREEN for Running & Safe
+    } else {
+        RGB.color(0, 0, 0);
+    }
+
+    // 2. Spark Core Onboard Blue LED (Pin D7) - Blinks to show running
+    digitalWrite(PIN_LED_D7, d7Blink ? HIGH : LOW);
+
+    // 3. Shield RGB LED outputs (D9, D10, D11 via A5, A6, A7 - both polarities driven)
+    // Common-Cathode: HIGH = ON, Common-Anode: LOW = ON. We drive Active-HIGH as standard.
+    digitalWrite(PIN_RGB_RED,   isRed   ? HIGH : LOW);
+    digitalWrite(PIN_RGB_GREEN, isGreen ? HIGH : LOW);
+    digitalWrite(PIN_RGB_BLUE,  isBlue  ? HIGH : LOW);
+}
+
+// ----------------------------------------------------------------------------
+// AUTO-CALIBRATING ULTRASONIC DRIVER (D0/D1)
+// ----------------------------------------------------------------------------
+void configureUltrasonicPins() {
+    pinMode(pinTrig, OUTPUT);
+    digitalWrite(pinTrig, LOW);
+    pinMode(pinEcho, INPUT);
+}
+
+void swapUltrasonicPins() {
+    int temp = pinTrig;
+    pinTrig = pinEcho;
+    pinEcho = temp;
+    configureUltrasonicPins();
+}
+
+uint32_t pulseInWithTimeout(int pin, int value, unsigned long timeoutUs) {
+    unsigned long startWait = micros();
+    while (digitalRead(pin) == value) {
+        if (micros() - startWait > timeoutUs) return 0;
+    }
+    while (digitalRead(pin) != value) {
+        if (micros() - startWait > timeoutUs) return 0;
+    }
+    unsigned long pulseStart = micros();
+    while (digitalRead(pin) == value) {
+        if (micros() - pulseStart > timeoutUs) return 0;
+    }
+    return micros() - pulseStart;
+}
+
+int pingPair(int tPin, int ePin) {
+    pinMode(tPin, OUTPUT);
     digitalWrite(tPin, LOW);
+    pinMode(ePin, INPUT);
     delayMicroseconds(4);
     digitalWrite(tPin, HIGH);
-    delayMicroseconds(10);
+    delayMicroseconds(12);
     digitalWrite(tPin, LOW);
 
-    // Wait for Echo to rise (Timeout 6ms)
-    unsigned long t0 = micros();
-    while (digitalRead(ePin) == LOW) {
-        if (micros() - t0 > 6000) return 0;
-    }
-
-    // Measure Echo HIGH duration (Timeout 25ms = ~430 cm)
-    unsigned long tStart = micros();
-    while (digitalRead(ePin) == HIGH) {
-        if (micros() - tStart > 25000) return 0;
-    }
-    unsigned long echoUs = micros() - tStart;
-    if (echoUs < 116) return 0;
-    return (int)(echoUs / 58UL);
+    unsigned long duration = pulseInWithTimeout(ePin, HIGH, 28000);
+    if (duration < 116 || duration > 24000) return 0;
+    return (int)(duration / 58UL);
 }
 
-int getFilteredDistance() {
-    int sample = pingOnce(pinTrig, pinEcho);
-    if (sample >= 2 && sample <= 400) {
-        distHistory[distHistIdx] = sample;
+int readUltrasonicDistanceCm() {
+    int cm = pingPair(pinTrig, pinEcho);
+    if (cm <= 0 || cm > 400) {
+        // Try reverse configuration immediately
+        int altTrig = (pinTrig == D0) ? D1 : D0;
+        int altEcho = (pinEcho == D0) ? D1 : D0;
+        int altCm = pingPair(altTrig, altEcho);
+        if (altCm >= 2 && altCm <= 400) {
+            pinTrig = altTrig;
+            pinEcho = altEcho;
+            cm = altCm;
+        }
+    }
+
+    if (cm >= 2 && cm <= 400) {
+        distHistory[distHistIdx] = cm;
         distHistIdx = (distHistIdx + 1) % 3;
     }
+
     int a = distHistory[0], b = distHistory[1], c = distHistory[2];
-    int med = a;
-    if ((a <= b && b <= c) || (c <= b && b <= a)) med = b;
-    else if ((b <= a && a <= c) || (c <= a && a <= b)) med = a;
-    else med = c;
-    return med;
+    int median = a;
+    if ((a <= b && b <= c) || (c <= b && b <= a)) median = b;
+    else if ((b <= a && a <= c) || (c <= a && a <= b)) median = a;
+    else median = c;
+
+    return median;
 }
 
 // ----------------------------------------------------------------------------
 // DHT11 SENSOR DRIVER (Digital Pin D4)
 // ----------------------------------------------------------------------------
-bool readDHT(int &tOut, int &hOut) {
+bool readDHT11(int &outTemp, int &outHum) {
     uint8_t data[5] = {0, 0, 0, 0, 0};
 
     pinMode(PIN_DHT11, OUTPUT);
@@ -151,87 +286,90 @@ bool readDHT(int &tOut, int &hOut) {
     }
     interrupts();
 
-    if (((data[0] + data[1] + data[2] + data[3]) & 0xFF) != data[4]) return false;
+    uint8_t sum = (data[0] + data[1] + data[2] + data[3]) & 0xFF;
+    if (sum != data[4]) return false;
     if (data[0] == 0 && data[2] == 0) return false;
 
-    hOut = data[0];
-    tOut = data[2];
+    outHum  = data[0];
+    outTemp = data[2];
     return true;
 }
 
 // ----------------------------------------------------------------------------
-// LM35 TEMPERATURE DRIVER (Analog Pin A2)
+// CLOUD COMMAND HANDLER
 // ----------------------------------------------------------------------------
-int readLM35() {
-    uint32_t sum = 0;
-    for (int i = 0; i < 16; i++) {
-        sum += analogRead(PIN_LM35_A2);
-        delayMicroseconds(30);
-    }
-    rawA2 = (int)(sum / 16);
-    float mv = ((float)rawA2 * 3300.0f) / 4095.0f;
-    int c = (int)(mv / 10.0f + 0.5f);
-    if (c >= 2 && c <= 80) tempLm35 = c;
-    return tempLm35;
-}
-
-// ----------------------------------------------------------------------------
-// POTENTIOMETER / ANALOG HUMIDITY (Pin A0)
-// ----------------------------------------------------------------------------
-int readPotHumidity() {
-    uint32_t sum = 0;
-    for (int i = 0; i < 8; i++) {
-        sum += analogRead(PIN_POT_A0);
-        delayMicroseconds(20);
-    }
-    rawA0 = (int)(sum / 8);
-    int rh = (int)map(rawA0, 0, 4095, 10, 95);
-    if (rh < 5)  rh = 5;
-    if (rh > 99) rh = 99;
-    return rh;
-}
-
-// ----------------------------------------------------------------------------
-// PIN CONFIGURATION & COMMAND HANDLER
-// ----------------------------------------------------------------------------
-void setUltrasonicMode(int mode) {
-    ultrasonicMode = mode;
-    if (ultrasonicMode == 0) {
-        pinTrig = D1; pinEcho = D0;
-    } else {
-        pinTrig = D0; pinEcho = D1;
-    }
-    pinMode(pinTrig, OUTPUT);
-    digitalWrite(pinTrig, LOW);
-    pinMode(pinEcho, INPUT);
-}
-
 int handleCommand(String args) {
     if (args.length() == 0) return -1;
     char c = args.charAt(0);
+    char sub = args.length() > 1 ? args.charAt(1) : 0;
 
+    // Pin pulse diagnostics: p0 = pulse D0/measure D1, p1 = pulse D1/measure D0
+    if (c == 'p') {
+        if (sub == '0') return pingPair(D0, D1);
+        if (sub == '1') return pingPair(D1, D0);
+    }
+
+    // Digital read diagnostics: r0=D0, r1=D1, r2=D2, r3=D3, r6=D6
+    if (c == 'r') {
+        if (sub == '0') return digitalRead(D0);
+        if (sub == '1') return digitalRead(D1);
+        if (sub == '2') return digitalRead(D2);
+        if (sub == '3') return digitalRead(D3);
+        if (sub == '6') return digitalRead(D6);
+    }
+
+    // Analog read diagnostics: a0=A0, a1=A1, a2=A2, a3=A3, a4=A4
+    if (c == 'a') {
+        if (sub == '0') return analogRead(A0);
+        if (sub == '1') return analogRead(A1);
+        if (sub == '2') return analogRead(A2);
+        if (sub == '3') return analogRead(A3);
+        if (sub == '4') return analogRead(A4);
+    }
+
+    // Mute / Unmute Buzzer
     if (c == 'm') {
         buzzerMuted = !buzzerMuted;
-        setBuzzer(false);
+        buzzerOff();
         return buzzerMuted ? 10 : 11;
     }
-    if (c == 'u' || c == 's') {
-        setUltrasonicMode(ultrasonicMode == 0 ? 1 : 0);
-        return ultrasonicMode == 0 ? 30 : 31;
-    }
-    if (c == 'p') {
-        buzzerActiveLow = !buzzerActiveLow;
-        setBuzzer(false);
-        return buzzerActiveLow ? 40 : 41;
-    }
+    // Test Melodies: 't' or '1' = Welcome, 'k' = Motion chime, 's' = Siren
     if (c == 't' || c == '1') {
-        playSoftChirp(40);
+        playWelcomeChime();
         return 1;
     }
+    if (c == 'k') {
+        playMelodyMotion();
+        return 5;
+    }
+    if (c == 's') {
+        playIntrusionAlarm();
+        return 2;
+    }
+    // Silence All Alarms
     if (c == '0' || c == 'o') {
-        setBuzzer(false);
-        digitalWrite(PIN_LED_D7, LOW);
+        forceAlarmOn = false;
+        forceLightOn = false;
+        buzzerOff();
+        updateLeds(false, true, false, true);
         return 0;
+    }
+    // Toggle Light ON/OFF
+    if (c == 'l') {
+        forceLightOn = !forceLightOn;
+        return forceLightOn ? 20 : 21;
+    }
+    // Swap Ultrasonic Trig / Echo pins dynamically ('u')
+    if (c == 'u') {
+        swapUltrasonicPins();
+        return (pinTrig == D0) ? 30 : 31;
+    }
+    // Probe Ultrasonic Distance
+    if (c == 'c') {
+        distHistory[0] = 150; distHistory[1] = 150; distHistory[2] = 150;
+        int d = readUltrasonicDistanceCm();
+        playTone(30, 2400);
+        return d;
     }
     return -1;
 }
@@ -240,36 +378,65 @@ int handleCommand(String args) {
 // SETUP
 // ----------------------------------------------------------------------------
 void setup() {
-    // 1. Buzzer Silent on Boot
-    pinMode(PIN_BUZZER, OUTPUT);
-    setBuzzer(false);
+    // 1. Take control of Onboard RGB LED for color-coded status
+    RGB.control(true);
+    RGB.brightness(255);
+    RGB.color(0, 255, 0); // Boot with Green
 
-    // 2. Onboard Blue LED (D7)
-    pinMode(PIN_LED_D7, OUTPUT);
-    digitalWrite(PIN_LED_D7, LOW);
+    // 2. Actuator Outputs
+    pinMode(PIN_BUZZER,    OUTPUT);
+    buzzerOff();
+    pinMode(PIN_RGB_RED,   OUTPUT);
+    pinMode(PIN_RGB_GREEN, OUTPUT);
+    pinMode(PIN_RGB_BLUE,  OUTPUT);
+    pinMode(PIN_LED_D7,    OUTPUT);
 
-    // 3. Inputs
+    // Initial State: Green ON, Red/Blue OFF, D7 HIGH
+    updateLeds(false, true, false, true);
+
+    // 3. Ultrasonic Sonar Pins
+    configureUltrasonicPins();
+
+    // 4. Digital Inputs
     pinMode(PIN_SW1,    INPUT_PULLUP);
+    pinMode(PIN_PIR_D3, INPUT_PULLUP);
     pinMode(PIN_IR_D6,  INPUT_PULLUP);
     pinMode(PIN_DHT11,  INPUT_PULLUP);
-    pinMode(PIN_POT_A0, INPUT);
+
+    // 5. Analog Inputs (A0-A4)
+    pinMode(PIN_POT_A0,  INPUT);
+    pinMode(PIN_LDR_A1,  INPUT);
     pinMode(PIN_LM35_A2, INPUT);
-    // Pin A1 is intentionally excluded from firmware
+    pinMode(PIN_AUX_A3,  INPUT);
+    pinMode(PIN_AUX_A4,  INPUT);
 
-    // 4. Ultrasonic Sonar
-    setUltrasonicMode(0);
+    // 6. Play Welcome Melodic Chime
+    playWelcomeChime();
 
-    // 5. Short 25ms soft chirp on boot
-    playSoftChirp(25);
+    // 7. Initial Sensor Samples
+    currentPot   = analogRead(PIN_POT_A0);
+    currentLight = analogRead(PIN_LDR_A1);
+    lastReportedPot = currentPot;
+    lastReportedLdr = currentLight;
 
-    // 6. Register Exactly 4 Particle Cloud Variables (Spark Core standard limit)
+    int t = 0, h = 0;
+    if (readDHT11(t, h) && t >= 5 && t <= 55) {
+        currentTemp = t; currentHum = h;
+    } else {
+        currentTemp = 25; currentHum = 50;
+    }
+
+    // 8. Register Particle Cloud Variables (Including real LDR light & Pot rotation!)
     Particle.variable("temp",   currentTemp);
     Particle.variable("hum",    currentHum);
     Particle.variable("dist",   currentDist);
     Particle.variable("motion", currentMotion);
+    Particle.variable("light",  currentLight);
+    Particle.variable("pot",    currentPot);
 
-    // 7. Register Cloud Command Function
+    // 9. Register Cloud Functions
     Particle.function("alarm", handleCommand);
+    Particle.function("cmd",   handleCommand);
 }
 
 // ----------------------------------------------------------------------------
@@ -279,83 +446,165 @@ void loop() {
     Particle.process();
     unsigned long now = millis();
 
-    // Hardware Mute Button SW1 (Pin D2)
+    // 1. Hardware Push Button SW1 (Pin D2) - Silence / Mute
     if (digitalRead(PIN_SW1) == LOW) {
         buzzerMuted = true;
-        setBuzzer(false);
-        digitalWrite(PIN_LED_D7, LOW);
+        forceAlarmOn = false;
+        buzzerOff();
+        updateLeds(false, true, false, false);
+        playTone(15, 800); // Soft mute click
         delay(120);
     }
 
-    // Slow Sensor Cycle (DHT11 & LM35 read every 2.5s)
+    // 2. Slow Sensor Cycle (DHT11 & Analog Channels sampled every 2.5 seconds)
     if (now - lastDhtTime >= DHT_SAMPLE_MS) {
         lastDhtTime = now;
-
         int t = 0, h = 0;
-        if (readDHT(t, h)) {
-            tempDht = t;
-            humDht  = h;
-            dhtOk   = 1;
-        } else {
-            dhtOk   = 0;
+        bool dhtSuccess = (readDHT11(t, h) && t >= 5 && t <= 55);
+        if (dhtSuccess) {
+            currentTemp = t;
+            currentHum  = h;
         }
 
-        readLM35();
+        // Auxiliary analog samples
+        int rawA2 = analogRead(PIN_LM35_A2);
+        valAuxA3 = analogRead(PIN_AUX_A3);
+        valAuxA4 = analogRead(PIN_AUX_A4);
 
-        // Primary Temperature Selection
-        if (dhtOk == 1 && tempDht >= 5 && tempDht <= 60) {
-            currentTemp = tempDht;
-        } else if (tempLm35 >= 5 && tempLm35 <= 75) {
-            currentTemp = tempLm35;
-        }
+        float lm35Mv = ((float)rawA2 * 3300.0f) / 4095.0f;
+        valLm35Temp = (int)(lm35Mv / 10.0f + 0.5f);
 
-        // Primary Humidity Selection
-        if (dhtOk == 1 && humDht >= 10 && humDht <= 95) {
-            currentHum = humDht;
-        } else {
-            currentHum = readPotHumidity();
+        if (!dhtSuccess && valLm35Temp >= 5 && valLm35Temp <= 65) {
+            currentTemp = valLm35Temp;
         }
     }
 
-    // Fast Sensor Cycle (Ultrasonic & IR read every 100ms)
-    if (now - lastFastLoopTime >= 100) {
+    // 3. Fast Sensor Cycle (Ultrasonic, IR, Rotation & LDR sampled every 100ms)
+    if (now - lastFastLoopTime >= FAST_LOOP_MS) {
         lastFastLoopTime = now;
 
-        currentDist = getFilteredDistance();
+        // A. Ultrasonic Distance Measurement
+        currentDist = readUltrasonicDistanceCm();
+        Particle.process();
 
-        // IR Obstacle Sensor (Active-LOW on D6)
-        if (digitalRead(PIN_IR_D6) == LOW) {
-            if (irFilterCount < 3) irFilterCount++;
-        } else {
-            if (irFilterCount > 0) irFilterCount--;
+        // B. Continuous Fast Sampling of Analog Sensors (Potentiometer & LDR)
+        currentPot   = analogRead(PIN_POT_A0);
+        currentLight = analogRead(PIN_LDR_A1);
+
+        // Detect dynamic user interaction on sensors:
+        // 1. IR receiver trigger (Active-LOW on D6)
+        bool irDetected = (digitalRead(PIN_IR_D6) == LOW);
+
+        // 2. PIR motion sensor (Active-LOW on D3)
+        bool pirDetected = (digitalRead(PIN_PIR_D3) == LOW);
+
+        // 3. Rotation sensor interaction (User turned the potentiometer knob by > 65 counts)
+        int potDelta = abs(currentPot - lastReportedPot);
+        bool rotationDetected = (potDelta > 65);
+        if (rotationDetected) {
+            lastReportedPot = currentPot;
         }
-        currentMotion = (irFilterCount >= 2) ? 1 : 0;
 
-        // Alert Condition: Distance < 40 cm OR IR detected
-        bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_THRESHOLD_CM);
-        bool irBreach   = (currentMotion == 1);
-        bool breach     = (proxBreach || irBreach);
+        // 4. LDR hand wave / shadow detection (Sudden light change > 160 counts)
+        int ldrDelta = abs(currentLight - lastReportedLdr);
+        bool ldrWaveDetected = (ldrDelta > 160);
+        if (ldrWaveDetected) {
+            lastReportedLdr = currentLight;
+        }
 
-        if (breach) {
-            digitalWrite(PIN_LED_D7, (now % 300 < 150) ? HIGH : LOW);
-            // Calm, non-annoying pulse spaced 2.2 seconds apart
-            if (now - lastChirpTime >= 2200) {
-                lastChirpTime = now;
-                playSoftChirp(35);
+        // Combine into unified motion & gesture detection
+        bool rawGestureTrigger = (irDetected || pirDetected || rotationDetected || ldrWaveDetected);
+        if (rawGestureTrigger) {
+            motionHoldUntil = now + MOTION_HOLD_MS; // 1.8s latch
+        }
+        bool isMotionActive = (now < motionHoldUntil);
+
+        // C. Security Alarm Evaluation (Ultrasonic threshold = 20 cm)
+        bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_ALERT_CM);
+
+        // D. Hardware Actuators: Onboard RGB Color Change + Running Blink + Buzzer Melodies
+        bool redLit   = false;
+        bool greenLit = false;
+        bool blueLit  = false;
+        bool d7Blink  = false;
+        bool buzzerOn = false;
+
+        if (proxBreach) {
+            // PROXIMITY BREACH (< 20 cm): RED LED, Fast Strobe D7, Intrusion Melody
+            redLit   = true;
+            greenLit = false;
+            blueLit  = false;
+            d7Blink  = (now % 200 < 100); // 5Hz fast alarm strobe
+            buzzerOn = true;
+
+            if (now - lastAlarmToneTime >= 1400) {
+                lastAlarmToneTime = now;
+                playIntrusionAlarm();
+            }
+        } else if (isMotionActive) {
+            // MOTION / GESTURE / ROTATION DETECTED: BLUE LED, Strobe D7
+            redLit   = false;
+            greenLit = false;
+            blueLit  = true;
+            d7Blink  = (now % 250 < 125); // Motion strobe
+            buzzerOn = false;
+            buzzerOff();
+
+            // Play notification chime once when entering motion
+            if (lastMotionState == 0) {
+                playMelodyMotion();
             }
         } else {
-            digitalWrite(PIN_LED_D7, LOW);
-            setBuzzer(false);
+            // SAFE RUNNING STATE: GREEN LED, Calm 1Hz Heartbeat Blink, Buzzer SILENT
+            redLit   = false;
+            greenLit = true;
+            blueLit  = false;
+            // 80ms blink every 1000ms: clear visual proof the board is running!
+            d7Blink  = forceLightOn ? true : (now % 1000 < 80);
+            buzzerOn = false;
+            buzzerOff();
             buzzerMuted = false;
+
+            // Play gentle resolving chime once when returning from motion to safe
+            if (lastMotionState == 1) {
+                playMelodySafe();
+            }
         }
+
+        lastMotionState = isMotionActive ? 1 : 0;
+        updateLeds(redLit, greenLit, blueLit, d7Blink);
+
+        // E. Telemetry Bitmask Encoding in currentMotion
+        int mask = 0;
+        if (isMotionActive)    mask |= 1;   // Bit 0: Motion / Gesture Active
+        if (proxBreach)        mask |= 2;   // Bit 1: Proximity Breach (<20cm)
+        if (buzzerOn)          mask |= 4;   // Bit 2: Buzzer Alarm Active
+        if (d7Blink)           mask |= 8;   // Bit 3: D7 Onboard LED Lit
+        if (redLit)            mask |= 16;  // Bit 4: Red (Alarm) Lit
+        if (greenLit)          mask |= 32;  // Bit 5: Green (Safe) Lit
+        if (blueLit)           mask |= 64;  // Bit 6: Blue (Motion) Lit
+        if (irDetected)        mask |= 128; // Bit 7: IR Sensor Triggered
+        if (pirDetected)       mask |= 256; // Bit 8: PIR Triggered
+        if (rotationDetected)  mask |= 512; // Bit 9: Potentiometer Rotation Detected
+        if (ldrWaveDetected)   mask |= 1024;// Bit 10: LDR Hand Shadow Detected
+
+        // Pack 10-bit scaled Light (0-1023) into bits 11-20
+        int light10 = (currentLight >> 2) & 0x3FF;
+        mask |= (light10 << 11);
+
+        // Pack 10-bit scaled Pot rotation (0-1023) into bits 21-30
+        int pot10 = (currentPot >> 2) & 0x3FF;
+        mask |= (pot10 << 21);
+
+        currentMotion = mask;
     }
 
-    // Telemetry Broadcast every 20s
+    // 4. Telemetry Broadcast every 10 seconds
     if (now - lastPublishTime >= TELEMETRY_MS) {
         lastPublishTime = now;
-        char payload[40];
+        char payload[64];
         snprintf(payload, sizeof(payload), "%d,%d,%d,%d,%d,%d",
-                 currentTemp, currentHum, currentDist, currentMotion, tempLm35, dhtOk);
+                 currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
         Particle.publish("smartroom", payload, PRIVATE);
     }
 }
