@@ -79,7 +79,8 @@ int valAuxA4      = 0;
 int lastReportedPot   = 2048;
 int lastReportedLdr   = 800;
 int lastMotionState   = 0;
-int irFilterCount     = 0; // Integrating filter for IR intrusion detection (eliminates noise chatter)
+unsigned int irActiveBurstCount = 0; // Continuous microsecond pulse counter for IR intrusion
+unsigned long lastIrHitTime     = 0; // Timestamp of last valid IR pulse
 
 bool buzzerMuted      = false;
 bool forceLightOn     = false;
@@ -157,28 +158,65 @@ void playMelodySafe() {
 }
 
 // ----------------------------------------------------------------------------
-// LED CONTROLLER: ONBOARD RGB LED + D7 RUNNING BLINK + SHIELD RGB
 // ----------------------------------------------------------------------------
-void updateLeds(bool isRed, bool isGreen, bool isBlue, bool d7Blink) {
-    // 1. Spark Core Onboard RGB LED (RGB.control)
-    if (isRed) {
-        RGB.color(255, 0, 0);     // Brilliant RED for Alarm (< 20cm)
-    } else if (isBlue) {
-        RGB.color(0, 160, 255);   // Electric BLUE for Motion / Sensors
-    } else if (isGreen) {
-        RGB.color(0, 255, 0);     // Vibrant GREEN for Running & Safe
+// LED CONTROLLER: 5S GREEN BEACON PULSE (NORMAL) vs MULTI-COLOR SIREN FLASHING (ALARM)
+// ----------------------------------------------------------------------------
+const uint8_t SIREN_PALETTE[8][3] = {
+    {255, 0, 0},     // 0: Vivid Red
+    {0, 0, 255},     // 1: Electric Blue
+    {255, 255, 255}, // 2: Strobe White
+    {255, 200, 0},   // 3: High-Intensity Amber
+    {0, 255, 255},   // 4: Cyan Strobe
+    {255, 0, 220},   // 5: Neon Magenta
+    {255, 60, 0},    // 6: Deep Orange
+    {0, 255, 80}     // 7: Vivid Emerald
+};
+
+void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
+    if (isAlarm || isMotion || forceAlarmOn) {
+        // SIREN FLASHING: Rapid multi-color strobe flashing across all colors like emergency siren!
+        static unsigned long lastSirenFlashTime = 0;
+        static uint8_t curR = 255, curG = 0, curB = 0;
+        static uint8_t flashCycle = 0;
+
+        if (now - lastSirenFlashTime >= 65) {
+            lastSirenFlashTime = now;
+            flashCycle++;
+            if (flashCycle % 2 == 0) {
+                int colIdx = random(0, 8);
+                curR = SIREN_PALETTE[colIdx][0];
+                curG = SIREN_PALETTE[colIdx][1];
+                curB = SIREN_PALETTE[colIdx][2];
+            } else {
+                curR = 0; curG = 0; curB = 0;
+            }
+        }
+
+        RGB.color(curR, curG, curB);
+
+        // Shield RGB LEDs track siren strobe
+        digitalWrite(PIN_RGB_RED,   (curR > 80) ? HIGH : LOW);
+        digitalWrite(PIN_RGB_GREEN, (curG > 80) ? HIGH : LOW);
+        digitalWrite(PIN_RGB_BLUE,  (curB > 80) ? HIGH : LOW);
+
+        // High-speed 10Hz D7 onboard strobe
+        digitalWrite(PIN_LED_D7, (now % 100 < 50) ? HIGH : LOW);
     } else {
-        RGB.color(0, 0, 0);
+        // NORMAL / SAFE: Blink green every 5 seconds (180ms pulse)
+        bool greenBlink = (now % 5000 < 180);
+
+        if (greenBlink || forceLightOn) {
+            RGB.color(0, 255, 0); // Vibrant Green
+            digitalWrite(PIN_RGB_GREEN, HIGH);
+            digitalWrite(PIN_LED_D7, HIGH);
+        } else {
+            RGB.color(0, 0, 0);   // Dark between 5s pulses
+            digitalWrite(PIN_RGB_GREEN, LOW);
+            digitalWrite(PIN_LED_D7, LOW);
+        }
+        digitalWrite(PIN_RGB_RED,  LOW);
+        digitalWrite(PIN_RGB_BLUE, LOW);
     }
-
-    // 2. Spark Core Onboard Blue LED (Pin D7) - Blinks to show running
-    digitalWrite(PIN_LED_D7, d7Blink ? HIGH : LOW);
-
-    // 3. Shield RGB LED outputs (D9, D10, D11 via A5, A6, A7 - both polarities driven)
-    // Common-Cathode: HIGH = ON, Common-Anode: LOW = ON. We drive Active-HIGH as standard.
-    digitalWrite(PIN_RGB_RED,   isRed   ? HIGH : LOW);
-    digitalWrite(PIN_RGB_GREEN, isGreen ? HIGH : LOW);
-    digitalWrite(PIN_RGB_BLUE,  isBlue  ? HIGH : LOW);
 }
 
 // ----------------------------------------------------------------------------
@@ -352,7 +390,7 @@ int handleCommand(String args) {
         forceAlarmOn = false;
         forceLightOn = false;
         buzzerOff();
-        updateLeds(false, true, false, true);
+        updateLeds(false, false, millis());
         return 0;
     }
     // Toggle Light ON/OFF
@@ -392,8 +430,8 @@ void setup() {
     pinMode(PIN_RGB_BLUE,  OUTPUT);
     pinMode(PIN_LED_D7,    OUTPUT);
 
-    // Initial State: Green ON, Red/Blue OFF, D7 HIGH
-    updateLeds(false, true, false, true);
+    // Initial State: Safe (Green 5s pulse), Buzzer Silent
+    updateLeds(false, false, millis());
 
     // 3. Ultrasonic Sonar Pins
     configureUltrasonicPins();
@@ -447,12 +485,19 @@ void loop() {
     Particle.process();
     unsigned long now = millis();
 
+    // Fast continuous sampling of IR Receiver (Pin D6) at microsecond speed
+    // Runs on EVERY iteration of loop() so remote pulses or beam interruptions are never missed
+    if (digitalRead(PIN_IR_D6) == LOW) {
+        irActiveBurstCount++;
+        lastIrHitTime = now;
+    }
+
     // 1. Hardware Push Button SW1 (Pin D2) - Silence / Mute
     if (digitalRead(PIN_SW1) == LOW) {
         buzzerMuted = true;
         forceAlarmOn = false;
         buzzerOff();
-        updateLeds(false, true, false, false);
+        updateLeds(false, false, now);
         playTone(15, 800); // Soft mute click
         delay(120);
     }
@@ -493,13 +538,12 @@ void loop() {
         currentLight = analogRead(PIN_LDR_A1);
 
         // Detect dynamic user interaction on sensors:
-        // 1. IR Intrusion Detector (Integrating filter: rejects ambient chatter, triggers on sustained beam interruption)
-        if (digitalRead(PIN_IR_D6) == LOW) {
-            if (irFilterCount < 4) irFilterCount++;
-        } else {
-            if (irFilterCount > 0) irFilterCount--;
-        }
-        bool irIntrusion = (irFilterCount >= 3); // Requires sustained beam break (300ms) to trigger
+        // 1. IR Intrusion Detector:
+        // Full loop sampling reliably detects IR remotes or beam interruptions (dozens of counts)
+        // while cleanly filtering stray optical noise / fluorescent flicker (< 3 counts)
+        bool irPinLow = (digitalRead(PIN_IR_D6) == LOW);
+        bool irIntrusion = (irActiveBurstCount >= 3 || irPinLow || (now - lastIrHitTime < 180 && irActiveBurstCount >= 2));
+        irActiveBurstCount = 0; // Reset counter for next 100ms evaluation window
 
         // 2. PIR motion sensor (Active-LOW on D3)
         bool pirDetected = (digitalRead(PIN_PIR_D3) == LOW);
@@ -511,7 +555,7 @@ void loop() {
             lastReportedPot = currentPot;
         }
 
-        // Clean intrusion & interaction trigger (No noisy LDR false alarms)
+        // Clean intrusion & interaction trigger
         bool rawIntrusionTrigger = (irIntrusion || pirDetected || rotationDetected);
         if (rawIntrusionTrigger) {
             motionHoldUntil = now + MOTION_HOLD_MS; // 1.8s latch
@@ -520,32 +564,17 @@ void loop() {
 
         // C. Security Alarm Evaluation (Ultrasonic threshold = 20 cm)
         bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_ALERT_CM);
-
-        // D. Hardware Actuators: Onboard RGB Color Change + Running Blink + Buzzer Melodies
-        bool redLit   = false;
-        bool greenLit = false;
-        bool blueLit  = false;
-        bool d7Blink  = false;
+        bool isAlarm = (proxBreach || forceAlarmOn);
         bool buzzerOn = false;
 
+        // D. Audio Management
         if (proxBreach) {
-            // PROXIMITY BREACH (< 20 cm): RED LED, Fast Strobe D7, Intrusion Melody
-            redLit   = true;
-            greenLit = false;
-            blueLit  = false;
-            d7Blink  = (now % 200 < 100); // 5Hz fast alarm strobe
             buzzerOn = true;
-
             if (now - lastAlarmToneTime >= 1400) {
                 lastAlarmToneTime = now;
                 playIntrusionAlarm();
             }
         } else if (isMotionActive) {
-            // MOTION / GESTURE / ROTATION DETECTED: BLUE LED, Strobe D7
-            redLit   = false;
-            greenLit = false;
-            blueLit  = true;
-            d7Blink  = (now % 250 < 125); // Motion strobe
             buzzerOn = false;
             buzzerOff();
 
@@ -554,12 +583,6 @@ void loop() {
                 playMelodyMotion();
             }
         } else {
-            // SAFE RUNNING STATE: GREEN LED, Calm 1Hz Heartbeat Blink, Buzzer SILENT
-            redLit   = false;
-            greenLit = true;
-            blueLit  = false;
-            // 80ms blink every 1000ms: clear visual proof the board is running!
-            d7Blink  = forceLightOn ? true : (now % 1000 < 80);
             buzzerOn = false;
             buzzerOff();
             buzzerMuted = false;
@@ -571,17 +594,19 @@ void loop() {
         }
 
         lastMotionState = isMotionActive ? 1 : 0;
-        updateLeds(redLit, greenLit, blueLit, d7Blink);
+
+        // Update LEDs: 5s green blink in safe mode, random multi-color siren flashing in alarm
+        updateLeds(isAlarm, isMotionActive, now);
 
         // E. Telemetry Bitmask Encoding in currentMotion
         int mask = 0;
         if (isMotionActive)    mask |= 1;   // Bit 0: Motion / Gesture Active
         if (proxBreach)        mask |= 2;   // Bit 1: Proximity Breach (<20cm)
         if (buzzerOn)          mask |= 4;   // Bit 2: Buzzer Alarm Active
-        if (d7Blink)           mask |= 8;   // Bit 3: D7 Onboard LED Lit
-        if (redLit)            mask |= 16;  // Bit 4: Red (Alarm) Lit
-        if (greenLit)          mask |= 32;  // Bit 5: Green (Safe) Lit
-        if (blueLit)           mask |= 64;  // Bit 6: Blue (Motion) Lit
+        if (digitalRead(PIN_LED_D7) == HIGH) mask |= 8;   // Bit 3: D7 Onboard LED Lit
+        if (isAlarm)           mask |= 16;  // Bit 4: Alarm / Siren Active
+        if (!isAlarm && !isMotionActive) mask |= 32;  // Bit 5: Safe / Normal (Green 5s pulse)
+        if (isMotionActive)    mask |= 64;  // Bit 6: Motion / Intrusion Active
         if (irIntrusion)       mask |= 128; // Bit 7: IR Intrusion Triggered
         if (pirDetected)       mask |= 256; // Bit 8: PIR Triggered
         if (rotationDetected)  mask |= 512; // Bit 9: Potentiometer Rotation Detected
