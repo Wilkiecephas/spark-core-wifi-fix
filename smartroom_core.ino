@@ -455,6 +455,11 @@ void setup() {
     // 7. Initial Sensor Samples
     currentPot   = analogRead(PIN_POT_A0);
     currentLight = analogRead(PIN_LDR_A1);
+    valAuxA3     = analogRead(PIN_AUX_A3);
+    valAuxA4     = analogRead(PIN_AUX_A4);
+    int initRawA2 = analogRead(PIN_LM35_A2);
+    float initLmMv = ((float)initRawA2 * 3300.0f) / 4095.0f;
+    valLm35Temp  = (int)(initLmMv / 10.0f + 0.5f);
     lastReportedPot = currentPot;
     lastReportedLdr = currentLight;
 
@@ -465,13 +470,16 @@ void setup() {
         currentTemp = 25; currentHum = 50;
     }
 
-    // 8. Register Particle Cloud Variables (Including real LDR light & Pot rotation!)
+    // 8. Register Particle Cloud Variables (Full Sensor Suite)
     Particle.variable("temp",   currentTemp);
     Particle.variable("hum",    currentHum);
     Particle.variable("dist",   currentDist);
     Particle.variable("motion", currentMotion);
     Particle.variable("light",  currentLight);
     Particle.variable("pot",    currentPot);
+    Particle.variable("temp2",  valLm35Temp);
+    Particle.variable("aux3",   valAuxA3);
+    Particle.variable("aux4",   valAuxA4);
 
     // 9. Register Cloud Functions
     Particle.function("alarm", handleCommand);
@@ -610,6 +618,7 @@ void loop() {
         if (irIntrusion)       mask |= 128; // Bit 7: IR Intrusion Triggered
         if (pirDetected)       mask |= 256; // Bit 8: PIR Triggered
         if (rotationDetected)  mask |= 512; // Bit 9: Potentiometer Rotation Detected
+        if (currentLight < 350) mask |= 1024;// Bit 10: Night / Darkness Mode Active
 
         // Pack 10-bit scaled Light (0-1023) into bits 11-20
         int light10 = (currentLight >> 2) & 0x3FF;
