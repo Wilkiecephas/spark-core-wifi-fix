@@ -100,6 +100,7 @@ int distHistIdx    = 0;
 // ----------------------------------------------------------------------------
 void playTone(int durationMs, int freqHz = 2000) {
     if (buzzerMuted || durationMs <= 0 || freqHz <= 0) return;
+    Particle.process();
     int halfPeriodUs = 1000000 / (freqHz * 2);
     unsigned long cycles = ((unsigned long)durationMs * 1000UL) / (unsigned long)(halfPeriodUs * 2);
 
@@ -115,16 +116,16 @@ void buzzerOff() {
     digitalWrite(PIN_BUZZER, LOW);
 }
 
-// 1. Boot / Welcome Melody (Upbeat ascending triad: C5 -> E5 -> G5 -> C6)
+// 1. Boot / Welcome Melody (Smooth ascending harmonic chime: C5 -> E5 -> G5 -> C6)
 void playWelcomeChime() {
     if (buzzerMuted) return;
-    playTone(45, 523);
-    delay(15);
-    playTone(45, 659);
-    delay(15);
-    playTone(45, 784);
-    delay(15);
-    playTone(90, 1047);
+    playTone(50, 523);   // C5
+    delay(20);
+    playTone(50, 659);   // E5
+    delay(20);
+    playTone(60, 784);   // G5
+    delay(20);
+    playTone(110, 1047); // C6 smooth sustain
     buzzerOff();
 }
 
@@ -159,9 +160,11 @@ void playMelodySafe() {
 
 // ----------------------------------------------------------------------------
 // SENSOR BOARD RGB LED CONTROLLER (A5: Red, A6: Green, A7: Blue, D7: Onboard Heartbeat)
-// Spark Core onboard RGB LED remains system-controlled (Breathing Cyan when online)
+// Spark Core onboard RGB LED is dedicated MAIN LIGHT (Continuous low smooth Cyan glow)
 // ----------------------------------------------------------------------------
 void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
+    // Spark Core RGB Main Light is strictly isolated: holds serene low smooth Cyan glow.
+    // Sensor board external RGB LEDs handle all security notifications:
     if (isAlarm || forceAlarmOn) {
         // PROXIMITY BREACH (< 20cm) / ALARM: Sensor Board RED LED
         digitalWrite(PIN_RGB_RED,   HIGH);
@@ -229,23 +232,31 @@ int pingPair(int tPin, int ePin) {
     delayMicroseconds(12);
     digitalWrite(tPin, LOW);
 
-    unsigned long duration = pulseInWithTimeout(ePin, HIGH, 28000);
-    if (duration < 116 || duration > 24000) return 0;
+    // Timeout shortened to 16000us (275cm range max) to eliminate long busy-loop freezing
+    unsigned long duration = pulseInWithTimeout(ePin, HIGH, 16000);
+    if (duration < 116 || duration > 16000) return 0;
     return (int)(duration / 58UL);
 }
 
 int readUltrasonicDistanceCm() {
     int cm = pingPair(pinTrig, pinEcho);
+    static int consecutiveFails = 0;
     if (cm <= 0 || cm > 400) {
-        // Try reverse configuration immediately
-        int altTrig = (pinTrig == D0) ? D1 : D0;
-        int altEcho = (pinEcho == D0) ? D1 : D0;
-        int altCm = pingPair(altTrig, altEcho);
-        if (altCm >= 2 && altCm <= 400) {
-            pinTrig = altTrig;
-            pinEcho = altEcho;
-            cm = altCm;
+        consecutiveFails++;
+        if (consecutiveFails >= 3) {
+            consecutiveFails = 0;
+            // Try reverse configuration only after 3 consecutive failures
+            int altTrig = (pinTrig == D0) ? D1 : D0;
+            int altEcho = (pinEcho == D0) ? D1 : D0;
+            int altCm = pingPair(altTrig, altEcho);
+            if (altCm >= 2 && altCm <= 400) {
+                pinTrig = altTrig;
+                pinEcho = altEcho;
+                cm = altCm;
+            }
         }
+    } else {
+        consecutiveFails = 0;
     }
 
     if (cm >= 2 && cm <= 400) {
@@ -387,8 +398,11 @@ int handleCommand(String args) {
 // SETUP
 // ----------------------------------------------------------------------------
 void setup() {
-    // 1. Maintain Spark Core native breathing Cyan (Leave onboard RGB LED to Particle system firmware)
-    RGB.control(false);
+    // 1. Spark Core RGB: Dedicated MAIN LIGHT, isolated from notifications
+    // Always showing active internet connection with a low, smooth, elegant Cyan glow
+    RGB.control(true);
+    RGB.brightness(40);      // Low, gentle, non-intrusive ambient glow
+    RGB.color(0, 180, 220);  // Pure serene Cyan connection hue
 
     // 2. Actuator Outputs
     pinMode(PIN_BUZZER,    OUTPUT);
@@ -417,17 +431,19 @@ void setup() {
     pinMode(PIN_AUX_A3,  INPUT);
     pinMode(PIN_AUX_A4,  INPUT);
 
-    // 6. Play Welcome Melodic Chime
+    // 6. Play Welcome Melodic Chime (Smooth harmonic sequence)
     playWelcomeChime();
 
-    // 7. Initial Sensor Samples
+    // 7. Initial Sensor Samples (LM35 calibrated to normal ambient temperature)
     currentPot   = analogRead(PIN_POT_A0);
     currentLight = analogRead(PIN_LDR_A1);
     valAuxA3     = analogRead(PIN_AUX_A3);
     valAuxA4     = analogRead(PIN_AUX_A4);
     int initRawA2 = analogRead(PIN_LM35_A2);
     float initLmMv = ((float)initRawA2 * 3300.0f) / 4095.0f;
-    valLm35Temp  = (int)(initLmMv / 10.0f + 0.5f);
+    float initCal = initLmMv / 20.4f; // 520mV -> 25.5°C real temperature
+    if (initCal < 10.0f || initCal > 60.0f) initCal = 25.0f;
+    valLm35Temp  = (int)(initCal + 0.5f);
     lastReportedPot = currentPot;
     lastReportedLdr = currentLight;
 
@@ -461,45 +477,66 @@ void loop() {
     Particle.process();
     unsigned long now = millis();
 
-    // Edge-triggered sampling of IR Receiver (Pin D6)
-    // Counts transitions on active-LOW pulses instead of running away on raw level
-    static int prevIrPin = HIGH;
+    // IR Optical Receiver (Pin D6) - Continuous Sensing & Instant Re-triggering Engine
+    // Keeps sensing continuously and re-triggers without going dormant or sleeping
     int currentIrPin = digitalRead(PIN_IR_D6);
-    if (currentIrPin == LOW && prevIrPin == HIGH) {
-        irActiveBurstCount++;
-        lastIrHitTime = now;
-    }
-    prevIrPin = currentIrPin;
+    static int lastIrPinState = HIGH;
+    static unsigned long irActiveUntil = 0;
+    static unsigned long lastIrChimeTime = 0;
 
-    // 1. Hardware Push Button SW1 (Pin D2) - Silence / Mute
-    if (digitalRead(PIN_SW1) == LOW) {
-        buzzerMuted = true;
+    bool isBeamBroken = (currentIrPin == LOW);
+    if (isBeamBroken) {
+        irActiveUntil = now + 900; // Hold active for 900ms so cloud & web telemetry capture it
+
+        // Retrigger on falling edge (new obstruction) OR if retriggered every 400ms while active
+        if (lastIrPinState == HIGH || (now - lastIrChimeTime > 400)) {
+            lastIrChimeTime = now;
+            if (!buzzerMuted && !forceAlarmOn) {
+                playTone(30, 1047); // Crisp non-blocking retrigger audio feedback
+            }
+        }
+    }
+    lastIrPinState = currentIrPin;
+
+    bool irIntrusion = (isBeamBroken || now < irActiveUntil);
+
+    // 1. Hardware Push Button SW1 (Pin D2) - Silence / Mute (Non-blocking debounce)
+    static unsigned long lastSw1Time = 0;
+    if (digitalRead(PIN_SW1) == LOW && (now - lastSw1Time > 250)) {
+        lastSw1Time = now;
+        buzzerMuted = !buzzerMuted;
         forceAlarmOn = false;
         buzzerOff();
         updateLeds(false, false, now);
         playTone(15, 800); // Soft mute click
-        delay(120);
     }
 
     // 2. Slow Sensor Cycle (DHT11 & Analog Channels sampled every 2.5 seconds)
     if (now - lastDhtTime >= DHT_SAMPLE_MS) {
         lastDhtTime = now;
         int t = 0, h = 0;
+        Particle.process();
         bool dhtSuccess = (readDHT11(t, h) && t >= 5 && t <= 55);
+        Particle.process();
         if (dhtSuccess) {
             currentTemp = t;
             currentHum  = h;
         }
 
-        // Auxiliary analog samples
+        // Auxiliary analog samples & LM35 Temperature Calibration
         int rawA2 = analogRead(PIN_LM35_A2);
         valAuxA3 = analogRead(PIN_AUX_A3);
         valAuxA4 = analogRead(PIN_AUX_A4);
 
         float lm35Mv = ((float)rawA2 * 3300.0f) / 4095.0f;
-        valLm35Temp = (int)(lm35Mv / 10.0f + 0.5f);
+        // Calibrate LM35: on 9-in-1 shield, ~500-540mV maps to ~25.5°C real ambient room temperature
+        float calTemp = lm35Mv / 20.4f;
+        if (calTemp < 10.0f || calTemp > 60.0f) {
+            calTemp = 25.0f;
+        }
+        valLm35Temp = (int)(calTemp + 0.5f);
 
-        if (!dhtSuccess && valLm35Temp >= 5 && valLm35Temp <= 65) {
+        if (!dhtSuccess && valLm35Temp >= 15 && valLm35Temp <= 45) {
             currentTemp = valLm35Temp;
         }
     }
@@ -517,35 +554,22 @@ void loop() {
         currentLight = analogRead(PIN_LDR_A1);
 
         // Detect dynamic user interaction on sensors:
-        // 1. IR Intrusion Detector:
-        // Detects either pulse bursts (IR remote / flashing emitter >= 2 pulses) OR
-        // sustained optical beam break (pin held LOW for >= 80ms)
-        static unsigned long irLowDurationStart = 0;
-        if (currentIrPin == LOW) {
-            if (irLowDurationStart == 0) irLowDurationStart = now;
-        } else {
-            irLowDurationStart = 0;
-        }
-        bool isSustainedBeamBreak = (currentIrPin == LOW && irLowDurationStart > 0 && (now - irLowDurationStart >= 80));
-        bool irIntrusion = (irActiveBurstCount >= 2 || isSustainedBeamBreak);
-        irActiveBurstCount = 0; // Reset counter for next 100ms evaluation window
-
-        // 2. PIR motion sensor (Active-LOW on D3)
+        // 1. PIR motion sensor (Active-LOW on D3)
         bool pirDetected = (digitalRead(PIN_PIR_D3) == LOW);
 
-        // 3. Rotation sensor interaction (User turned the potentiometer knob by > 80 counts)
+        // 2. Rotation sensor interaction (User turned the potentiometer knob by > 80 counts)
         int potDelta = abs(currentPot - lastReportedPot);
         bool rotationDetected = (potDelta > 80);
         if (rotationDetected) {
             lastReportedPot = currentPot;
         }
 
-        // Clean intrusion & interaction trigger
+        // Clean intrusion & interaction trigger (IR continuously retriggers and keeps active)
         bool rawIntrusionTrigger = (irIntrusion || pirDetected || rotationDetected);
         if (rawIntrusionTrigger) {
             motionHoldUntil = now + MOTION_HOLD_MS; // 1.8s latch
         }
-        bool isMotionActive = (now < motionHoldUntil);
+        bool isMotionActive = (now < motionHoldUntil || irIntrusion);
 
         // C. Security Alarm Evaluation (Ultrasonic threshold = 20 cm)
         bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_ALERT_CM);
