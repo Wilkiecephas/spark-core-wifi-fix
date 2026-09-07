@@ -158,64 +158,34 @@ void playMelodySafe() {
 }
 
 // ----------------------------------------------------------------------------
+// SENSOR BOARD RGB LED CONTROLLER (A5: Red, A6: Green, A7: Blue, D7: Onboard Heartbeat)
+// Spark Core onboard RGB LED remains system-controlled (Breathing Cyan when online)
 // ----------------------------------------------------------------------------
-// LED CONTROLLER: 5S GREEN BEACON PULSE (NORMAL) vs MULTI-COLOR SIREN FLASHING (ALARM)
-// ----------------------------------------------------------------------------
-const uint8_t SIREN_PALETTE[8][3] = {
-    {255, 0, 0},     // 0: Vivid Red
-    {0, 0, 255},     // 1: Electric Blue
-    {255, 255, 255}, // 2: Strobe White
-    {255, 200, 0},   // 3: High-Intensity Amber
-    {0, 255, 255},   // 4: Cyan Strobe
-    {255, 0, 220},   // 5: Neon Magenta
-    {255, 60, 0},    // 6: Deep Orange
-    {0, 255, 80}     // 7: Vivid Emerald
-};
-
 void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
-    if (isAlarm || isMotion || forceAlarmOn) {
-        // SIREN FLASHING: Rapid multi-color strobe flashing across all colors like emergency siren!
-        static unsigned long lastSirenFlashTime = 0;
-        static uint8_t curR = 255, curG = 0, curB = 0;
-        static uint8_t flashCycle = 0;
+    if (isAlarm || forceAlarmOn) {
+        // PROXIMITY BREACH (< 20cm) / ALARM: Sensor Board RED LED
+        digitalWrite(PIN_RGB_RED,   HIGH);
+        digitalWrite(PIN_RGB_GREEN, LOW);
+        digitalWrite(PIN_RGB_BLUE,  LOW);
 
-        if (now - lastSirenFlashTime >= 65) {
-            lastSirenFlashTime = now;
-            flashCycle++;
-            if (flashCycle % 2 == 0) {
-                int colIdx = random(0, 8);
-                curR = SIREN_PALETTE[colIdx][0];
-                curG = SIREN_PALETTE[colIdx][1];
-                curB = SIREN_PALETTE[colIdx][2];
-            } else {
-                curR = 0; curG = 0; curB = 0;
-            }
-        }
+        // Fast 5Hz D7 onboard strobe for alarm alert
+        digitalWrite(PIN_LED_D7, (now % 200 < 100) ? HIGH : LOW);
+    } else if (isMotion) {
+        // INTRUSION / PIR MOTION / IR ACTIVE: Sensor Board BLUE LED
+        digitalWrite(PIN_RGB_RED,   LOW);
+        digitalWrite(PIN_RGB_GREEN, LOW);
+        digitalWrite(PIN_RGB_BLUE,  HIGH);
 
-        RGB.color(curR, curG, curB);
-
-        // Shield RGB LEDs track siren strobe
-        digitalWrite(PIN_RGB_RED,   (curR > 80) ? HIGH : LOW);
-        digitalWrite(PIN_RGB_GREEN, (curG > 80) ? HIGH : LOW);
-        digitalWrite(PIN_RGB_BLUE,  (curB > 80) ? HIGH : LOW);
-
-        // High-speed 10Hz D7 onboard strobe
-        digitalWrite(PIN_LED_D7, (now % 100 < 50) ? HIGH : LOW);
+        // Solid / medium pulse on D7
+        digitalWrite(PIN_LED_D7, (now % 400 < 200) ? HIGH : LOW);
     } else {
-        // NORMAL / SAFE: Blink green every 5 seconds (180ms pulse)
-        bool greenBlink = (now % 5000 < 180);
+        // NORMAL / SAFE STATE: Sensor Board GREEN LED
+        digitalWrite(PIN_RGB_RED,   LOW);
+        digitalWrite(PIN_RGB_GREEN, HIGH);
+        digitalWrite(PIN_RGB_BLUE,  LOW);
 
-        if (greenBlink || forceLightOn) {
-            RGB.color(0, 255, 0); // Vibrant Green
-            digitalWrite(PIN_RGB_GREEN, HIGH);
-            digitalWrite(PIN_LED_D7, HIGH);
-        } else {
-            RGB.color(0, 0, 0);   // Dark between 5s pulses
-            digitalWrite(PIN_RGB_GREEN, LOW);
-            digitalWrite(PIN_LED_D7, LOW);
-        }
-        digitalWrite(PIN_RGB_RED,  LOW);
-        digitalWrite(PIN_RGB_BLUE, LOW);
+        // Calm 1Hz heartbeat pulse on D7 (80ms pulse every 1000ms: visual proof of running)
+        digitalWrite(PIN_LED_D7, (forceLightOn || (now % 1000 < 80)) ? HIGH : LOW);
     }
 }
 
@@ -417,10 +387,8 @@ int handleCommand(String args) {
 // SETUP
 // ----------------------------------------------------------------------------
 void setup() {
-    // 1. Take control of Onboard RGB LED for color-coded status
-    RGB.control(true);
-    RGB.brightness(255);
-    RGB.color(0, 255, 0); // Boot with Green
+    // 1. Maintain Spark Core native breathing Cyan (Leave onboard RGB LED to Particle system firmware)
+    RGB.control(false);
 
     // 2. Actuator Outputs
     pinMode(PIN_BUZZER,    OUTPUT);
@@ -430,7 +398,7 @@ void setup() {
     pinMode(PIN_RGB_BLUE,  OUTPUT);
     pinMode(PIN_LED_D7,    OUTPUT);
 
-    // Initial State: Safe (Green 5s pulse), Buzzer Silent
+    // Initial State: Safe (Sensor Board Green ON, Red/Blue OFF), Buzzer Silent
     updateLeds(false, false, millis());
 
     // 3. Ultrasonic Sonar Pins
@@ -493,12 +461,15 @@ void loop() {
     Particle.process();
     unsigned long now = millis();
 
-    // Fast continuous sampling of IR Receiver (Pin D6) at microsecond speed
-    // Runs on EVERY iteration of loop() so remote pulses or beam interruptions are never missed
-    if (digitalRead(PIN_IR_D6) == LOW) {
+    // Edge-triggered sampling of IR Receiver (Pin D6)
+    // Counts transitions on active-LOW pulses instead of running away on raw level
+    static int prevIrPin = HIGH;
+    int currentIrPin = digitalRead(PIN_IR_D6);
+    if (currentIrPin == LOW && prevIrPin == HIGH) {
         irActiveBurstCount++;
         lastIrHitTime = now;
     }
+    prevIrPin = currentIrPin;
 
     // 1. Hardware Push Button SW1 (Pin D2) - Silence / Mute
     if (digitalRead(PIN_SW1) == LOW) {
@@ -547,10 +518,16 @@ void loop() {
 
         // Detect dynamic user interaction on sensors:
         // 1. IR Intrusion Detector:
-        // Full loop sampling reliably detects IR remotes or beam interruptions (dozens of counts)
-        // while cleanly filtering stray optical noise / fluorescent flicker (< 3 counts)
-        bool irPinLow = (digitalRead(PIN_IR_D6) == LOW);
-        bool irIntrusion = (irActiveBurstCount >= 3 || irPinLow || (now - lastIrHitTime < 180 && irActiveBurstCount >= 2));
+        // Detects either pulse bursts (IR remote / flashing emitter >= 2 pulses) OR
+        // sustained optical beam break (pin held LOW for >= 80ms)
+        static unsigned long irLowDurationStart = 0;
+        if (currentIrPin == LOW) {
+            if (irLowDurationStart == 0) irLowDurationStart = now;
+        } else {
+            irLowDurationStart = 0;
+        }
+        bool isSustainedBeamBreak = (currentIrPin == LOW && irLowDurationStart > 0 && (now - irLowDurationStart >= 80));
+        bool irIntrusion = (irActiveBurstCount >= 2 || isSustainedBeamBreak);
         irActiveBurstCount = 0; // Reset counter for next 100ms evaluation window
 
         // 2. PIR motion sensor (Active-LOW on D3)
@@ -578,7 +555,7 @@ void loop() {
         // D. Audio Management
         if (proxBreach) {
             buzzerOn = true;
-            if (now - lastAlarmToneTime >= 1400) {
+            if (now - lastAlarmToneTime >= 1800) {
                 lastAlarmToneTime = now;
                 playIntrusionAlarm();
             }
@@ -593,7 +570,6 @@ void loop() {
         } else {
             buzzerOn = false;
             buzzerOff();
-            buzzerMuted = false;
 
             // Play gentle resolving chime once when returning from motion to safe
             if (lastMotionState == 1) {
