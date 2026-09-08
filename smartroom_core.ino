@@ -64,14 +64,14 @@ const unsigned long MOTION_HOLD_MS    = 1800;  // 1.8s hold for crisp, snappy mo
 
 // State Variables (Published to Particle Cloud)
 int currentDist   = 150;   // Distance in cm
-int currentTemp   = 25;    // Temperature in °C
+int currentTemp   = 31;    // Temperature in °C (African room ambient baseline)
 int currentHum    = 50;    // Relative Humidity (% RH)
 int currentMotion = 32;    // Bitmask of active triggers & LED states (Green = 32)
 int currentLight  = 800;   // LDR Light Sensor reading (0-4095)
 int currentPot    = 2048;  // Rotary Potentiometer reading (0-4095)
 
 // Auxiliary Analog Channels
-int valLm35Temp   = 25;
+int valLm35Temp   = 31;
 int valAuxA3      = 0;
 int valAuxA4      = 0;
 
@@ -441,8 +441,8 @@ void setup() {
     valAuxA4     = analogRead(PIN_AUX_A4);
     int initRawA2 = analogRead(PIN_LM35_A2);
     float initLmMv = ((float)initRawA2 * 3300.0f) / 4095.0f;
-    float initCal = initLmMv / 20.4f; // 520mV -> 25.5°C real temperature
-    if (initCal < 10.0f || initCal > 60.0f) initCal = 25.0f;
+    float initCal = initLmMv / 16.8f; // ~520mV -> 31.0°C African room temperature baseline
+    if (initCal < 15.0f || initCal > 65.0f) initCal = 31.0f;
     valLm35Temp  = (int)(initCal + 0.5f);
     lastReportedPot = currentPot;
     lastReportedLdr = currentLight;
@@ -451,7 +451,7 @@ void setup() {
     if (readDHT11(t, h) && t >= 5 && t <= 55) {
         currentTemp = t; currentHum = h;
     } else {
-        currentTemp = 25; currentHum = 50;
+        currentTemp = 31; currentHum = 50;
     }
 
     // 8. Register Particle Cloud Variables (Full Sensor Suite)
@@ -529,10 +529,10 @@ void loop() {
         valAuxA4 = analogRead(PIN_AUX_A4);
 
         float lm35Mv = ((float)rawA2 * 3300.0f) / 4095.0f;
-        // Calibrate LM35: on 9-in-1 shield, ~500-540mV maps to ~25.5°C real ambient room temperature
-        float calTemp = lm35Mv / 20.4f;
-        if (calTemp < 10.0f || calTemp > 60.0f) {
-            calTemp = 25.0f;
+        // Calibrate LM35: on 9-in-1 shield, ~500-540mV maps to ~31.0°C African ambient room temperature
+        float calTemp = lm35Mv / 16.8f;
+        if (calTemp < 15.0f || calTemp > 65.0f) {
+            calTemp = 31.0f;
         }
         valLm35Temp = (int)(calTemp + 0.5f);
 
