@@ -37,71 +37,65 @@
 SYSTEM_MODE(MANUAL);
 
 // ----------------------------------------------------------------------------
-// PIN ASSIGNMENTS
+// PIN ASSIGNMENTS (#define saves flash compared to const int)
 // ----------------------------------------------------------------------------
-int pinTrig               = D0;   // Confirmed D0 Trig
-int pinEcho               = D1;   // Confirmed D1 Echo
-const int PIN_SW1         = D2;   // Push Button SW1 (Mute)
-const int PIN_PIR_D3      = D3;   // PIR Motion Sensor / Key2
-const int PIN_DHT11       = D4;   // DHT11 Data
-const int PIN_BUZZER      = D5;   // Buzzer Pin
-const int PIN_IR_D6       = D6;   // IR Receiver
-const int PIN_LED_D7      = D7;   // Spark Core Onboard Blue LED
+uint8_t pinTrig           = D0;
+uint8_t pinEcho           = D1;
+#define PIN_SW1             D2
+#define PIN_PIR_D3          D3
+#define PIN_DHT11           D4
+#define PIN_BUZZER          D5
+#define PIN_IR_D6           D6
+#define PIN_LED_D7          D7
 
-// Analog Sensor Inputs (A0-A4)
-const int PIN_POT_A0      = A0;   // Rotary Potentiometer
-const int PIN_LDR_A1      = A1;   // LDR Light Sensor
-const int PIN_LM35_A2     = A2;   // LM35 Temperature Sensor
-// TI-89 Titanium Link Port (Dedicated TX/RX pins - 100% isolated from shield & ADC)
-const int PIN_TI_TIP      = TX;   // Tip  (Line 1 / Red)   -> Spark Core TX (PA9)
-const int PIN_TI_RING     = RX;   // Ring (Line 2 / White) -> Spark Core RX (PA10)
+#define PIN_POT_A0          A0
+#define PIN_LDR_A1          A1
+#define PIN_LM35_A2         A2
 
+#define ENABLE_TI_LINK 0
+#if ENABLE_TI_LINK
+#define PIN_TI_TIP          TX
+#define PIN_TI_RING         RX
+#endif
 
-// External RGB LED Outputs (A5-A7)
-const int PIN_RGB_RED     = A5;   // Red LED
-const int PIN_RGB_GREEN   = A6;   // Green LED
-const int PIN_RGB_BLUE    = A7;   // Blue LED
+#define PIN_RGB_RED         A5
+#define PIN_RGB_GREEN       A6
+#define PIN_RGB_BLUE        A7
 
-// Timing & Thresholds (Ultrasonic proximity threshold changed to 20 cm)
-const int PROXIMITY_ALERT_CM   = 20;    // Alert if obstacle < 20 cm (per user request)
-const unsigned long DHT_SAMPLE_MS     = 2500;  // DHT11 sample interval (2.5s)
-const unsigned long FAST_LOOP_MS      = 100;   // Fast loop (100ms - ultra-responsive)
-const unsigned long TELEMETRY_MS      = 15000; // ThingSpeak publish interval (15s free-tier minimum)
-const unsigned long MOTION_HOLD_MS    = 1800;  // 1.8s hold for crisp, snappy motion triggers
+// Timing & Thresholds
+#define PROXIMITY_ALERT_CM   20
+#define DHT_SAMPLE_MS        2500
+#define FAST_LOOP_MS         100
+#define TELEMETRY_MS         15000
+#define MOTION_HOLD_MS       1800
 
-// State Variables (Published to Particle Cloud)
-int currentDist   = 150;   // Distance in cm
-int currentTemp   = 31;    // Temperature in °C (African room ambient baseline)
-int currentHum    = 50;    // Relative Humidity (% RH)
-int currentMotion = 32;    // Bitmask of active triggers & LED states (Green = 32)
-int currentLight  = 800;   // LDR Light Sensor reading (0-4095)
-int currentPot    = 2048;  // Rotary Potentiometer reading (0-4095)
+// State Variables (Uninitialized = .bss section, 0 flash cost)
+int currentDist;
+int currentTemp;
+int currentHum;
+int currentMotion;
+int currentLight;
+int currentPot;
+int valLm35Temp;
+int lastReportedPot;
+int lastReportedLdr;
+int lastMotionState;
 
-// Auxiliary Analog Channels
-int valLm35Temp   = 31;
-int valAuxA3      = 0;
-int valAuxA4      = 0;
+bool buzzerMuted;
+bool forceLightOn;
+bool forceAlarmOn;
+int  forceRgbColor;
+unsigned long motionHoldUntil;
+unsigned long lastFastLoopTime;
+unsigned long lastDhtTime;
+unsigned long lastAlarmToneTime;
+unsigned long lastPublishTime;
 
-// Dynamic Sensitivity Tracking
-int lastReportedPot   = 2048;
-int lastReportedLdr   = 800;
-int lastMotionState   = 0;
-unsigned int irActiveBurstCount = 0; // Continuous microsecond pulse counter for IR intrusion
-unsigned long lastIrHitTime     = 0; // Timestamp of last valid IR pulse
+void processSerialCommand(const char* cmd);
 
-bool buzzerMuted      = false;
-bool forceLightOn     = false;
-bool forceAlarmOn     = false;
-unsigned long motionHoldUntil   = 0;
-unsigned long lastFastLoopTime  = 0;
-unsigned long lastDhtTime       = 0;
-unsigned long lastAlarmToneTime = 0;
-unsigned long lastPublishTime   = 0;
+int distHistory[1];
 
-// Filter history for distance (3 samples)
-int distHistory[3] = {150, 150, 150};
-int distHistIdx    = 0;
-
+#if ENABLE_TI_LINK
 // ----------------------------------------------------------------------------
 // TI-89 TITANIUM LINK PORT TELEMETRY DRIVER (DEDICATED TX / RX PINS)
 // ----------------------------------------------------------------------------
@@ -160,13 +154,13 @@ void sendTiTelemetry(int temp, int hum, int dist, int light, bool motion, bool b
         sendTiByte(alertMask);
     }
 }
+#endif
 
 // ----------------------------------------------------------------------------
 // BUZZER MELODIC AUDIO ENGINE
 // ----------------------------------------------------------------------------
 void playTone(int durationMs, int freqHz = 2000) {
     if (buzzerMuted || durationMs <= 0 || freqHz <= 0) return;
-    Particle.process();
     int halfPeriodUs = 1000000 / (freqHz * 2);
     unsigned long cycles = ((unsigned long)durationMs * 1000UL) / (unsigned long)(halfPeriodUs * 2);
 
@@ -182,79 +176,53 @@ void buzzerOff() {
     digitalWrite(PIN_BUZZER, LOW);
 }
 
-// 1. Boot / Welcome Melody (Smooth ascending harmonic chime: C5 -> E5 -> G5 -> C6)
+void playNotes(const uint16_t notes[], uint8_t count) {
+    if (buzzerMuted) return;
+    for (uint8_t i = 0; i < count; i += 2) {
+        playTone(notes[i], notes[i+1]);
+        delay(15);
+    }
+    buzzerOff();
+}
+
 void playWelcomeChime() {
-    if (buzzerMuted) return;
-    playTone(50, 523);   // C5
-    delay(20);
-    playTone(50, 659);   // E5
-    delay(20);
-    playTone(60, 784);   // G5
-    delay(20);
-    playTone(110, 1047); // C6 smooth sustain
-    buzzerOff();
+    static const uint16_t m[] = {50, 523, 50, 659, 60, 784, 110, 1047};
+    playNotes(m, 8);
 }
-
-// 2. Motion / Notification Melody (Pleasant 2-note chime: E5 -> B5)
 void playMelodyMotion() {
-    if (buzzerMuted) return;
-    playTone(45, 659);
-    delay(15);
-    playTone(85, 988);
-    buzzerOff();
+    static const uint16_t m[] = {45, 659, 85, 988};
+    playNotes(m, 4);
 }
-
-// 3. Proximity Alarm Siren (< 20cm: Urgent warble)
 void playIntrusionAlarm() {
-    if (buzzerMuted) return;
-    playTone(60, 880);  // A5
-    delay(20);
-    playTone(60, 698);  // F5
-    delay(20);
-    playTone(80, 880);  // A5
-    buzzerOff();
+    static const uint16_t m[] = {60, 880, 60, 698, 80, 880};
+    playNotes(m, 6);
 }
-
-// 4. Safe State Restored Melody (Gentle resolving motif: G5 -> C6)
 void playMelodySafe() {
-    if (buzzerMuted) return;
-    playTone(35, 784);
-    delay(15);
-    playTone(65, 1047);
-    buzzerOff();
+    static const uint16_t m[] = {35, 784, 65, 1047};
+    playNotes(m, 4);
 }
 
 // ----------------------------------------------------------------------------
 // SENSOR BOARD RGB LED CONTROLLER (A5: Red, A6: Green, A7: Blue, D7: Onboard Heartbeat)
-// Spark Core onboard RGB LED is dedicated MAIN LIGHT (Continuous low smooth Cyan glow)
 // ----------------------------------------------------------------------------
+static inline void setBoardLeds(bool r, bool g, bool b, bool d7) {
+    digitalWrite(PIN_RGB_RED,   r ? HIGH : LOW);
+    digitalWrite(PIN_RGB_GREEN, g ? HIGH : LOW);
+    digitalWrite(PIN_RGB_BLUE,  b ? HIGH : LOW);
+    digitalWrite(PIN_LED_D7,    d7 ? HIGH : LOW);
+}
+
 void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
-    // Spark Core RGB Main Light is strictly isolated: holds serene low smooth Cyan glow.
-    // Sensor board external RGB LEDs handle all security notifications:
+    if (forceRgbColor == 1) { setBoardLeds(1, 0, 0, 1); return; }
+    if (forceRgbColor == 2) { setBoardLeds(0, 1, 0, 0); return; }
+    if (forceRgbColor == 3) { setBoardLeds(0, 0, 1, 1); return; }
+
     if (isAlarm || forceAlarmOn) {
-        // PROXIMITY BREACH (< 20cm) / ALARM: Sensor Board RED LED
-        digitalWrite(PIN_RGB_RED,   HIGH);
-        digitalWrite(PIN_RGB_GREEN, LOW);
-        digitalWrite(PIN_RGB_BLUE,  LOW);
-
-        // Fast 5Hz D7 onboard strobe for alarm alert
-        digitalWrite(PIN_LED_D7, (now % 200 < 100) ? HIGH : LOW);
+        setBoardLeds(1, 0, 0, (now % 200 < 100));
     } else if (isMotion) {
-        // INTRUSION / PIR MOTION / IR ACTIVE: Sensor Board BLUE LED
-        digitalWrite(PIN_RGB_RED,   LOW);
-        digitalWrite(PIN_RGB_GREEN, LOW);
-        digitalWrite(PIN_RGB_BLUE,  HIGH);
-
-        // Solid / medium pulse on D7
-        digitalWrite(PIN_LED_D7, (now % 400 < 200) ? HIGH : LOW);
+        setBoardLeds(0, 0, 1, (now % 400 < 200));
     } else {
-        // NORMAL / SAFE STATE: Sensor Board GREEN LED
-        digitalWrite(PIN_RGB_RED,   LOW);
-        digitalWrite(PIN_RGB_GREEN, HIGH);
-        digitalWrite(PIN_RGB_BLUE,  LOW);
-
-        // Calm 1Hz heartbeat pulse on D7 (80ms pulse every 1000ms: visual proof of running)
-        digitalWrite(PIN_LED_D7, (forceLightOn || (now % 1000 < 80)) ? HIGH : LOW);
+        setBoardLeds(0, 1, 0, (forceLightOn || (now % 1000 < 80)));
     }
 }
 
@@ -290,9 +258,7 @@ uint32_t pulseInWithTimeout(int pin, int value, unsigned long timeoutUs) {
 }
 
 int pingPair(int tPin, int ePin) {
-    pinMode(tPin, OUTPUT);
     digitalWrite(tPin, LOW);
-    pinMode(ePin, INPUT);
     delayMicroseconds(4);
     digitalWrite(tPin, HIGH);
     delayMicroseconds(12);
@@ -306,37 +272,11 @@ int pingPair(int tPin, int ePin) {
 
 int readUltrasonicDistanceCm() {
     int cm = pingPair(pinTrig, pinEcho);
-    static int consecutiveFails = 0;
-    if (cm <= 0 || cm > 400) {
-        consecutiveFails++;
-        if (consecutiveFails >= 3) {
-            consecutiveFails = 0;
-            // Try reverse configuration only after 3 consecutive failures
-            int altTrig = (pinTrig == D0) ? D1 : D0;
-            int altEcho = (pinEcho == D0) ? D1 : D0;
-            int altCm = pingPair(altTrig, altEcho);
-            if (altCm >= 2 && altCm <= 400) {
-                pinTrig = altTrig;
-                pinEcho = altEcho;
-                cm = altCm;
-            }
-        }
-    } else {
-        consecutiveFails = 0;
-    }
-
     if (cm >= 2 && cm <= 400) {
-        distHistory[distHistIdx] = cm;
-        distHistIdx = (distHistIdx + 1) % 3;
+        if (distHistory[0] <= 0 || distHistory[0] > 400) distHistory[0] = cm;
+        distHistory[0] = (distHistory[0] * 3 + cm) >> 2;
     }
-
-    int a = distHistory[0], b = distHistory[1], c = distHistory[2];
-    int median = a;
-    if ((a <= b && b <= c) || (c <= b && b <= a)) median = b;
-    else if ((b <= a && a <= c) || (c <= a && a <= b)) median = a;
-    else median = c;
-
-    return median;
+    return distHistory[0];
 }
 
 // ----------------------------------------------------------------------------
@@ -397,109 +337,99 @@ void publishToThingSpeak(int temp, int hum, int dist, int motion, int light, int
         return;
     }
 
-    // Build URL-encoded POST body
-    char body[128];
-    snprintf(body, sizeof(body),
-        "api_key=%s&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d&field6=%d",
-        TS_WRITE_KEY, temp, hum, dist, motion, light, pot);
+    char req[160];
+    snprintf(req, sizeof(req),
+        "GET /update?api_key=" TS_WRITE_KEY "&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d&field6=%d HTTP/1.0\r\nHost: " TS_HOST "\r\n\r\n",
+        temp, hum, dist, motion, light, pot);
 
-    int bodyLen = strlen(body);
+    client.print(req);
 
-    // HTTP/1.0 POST (Connection: close avoids keep-alive hang on CC3000)
-    client.println("POST /update HTTP/1.0");
-    client.println("Host: " TS_HOST);
-    client.println("Content-Type: application/x-www-form-urlencoded");
-    client.print("Content-Length: ");
-    client.println(bodyLen);
-    client.println();
-    client.print(body);
-
-    // Drain response non-blockingly (max 2 seconds)
+    // Drain response non-blockingly (fast drain, max 80ms)
     unsigned long t0 = millis();
-    while (client.connected() && millis() - t0 < 2000) {
+    while (client.connected() && (millis() - t0 < 80)) {
         while (client.available()) client.read();
-        delay(10);
     }
     client.stop();
 }
 
 // ----------------------------------------------------------------------------
-// CLOUD COMMAND HANDLER (kept for Serial / local use)
+// HIGH-SPEED SERIAL TELEMETRY & COMMAND PROCESSOR
 // ----------------------------------------------------------------------------
-int handleCommand(String args) {
-    if (args.length() == 0) return -1;
-    char c = args.charAt(0);
-    char sub = args.length() > 1 ? args.charAt(1) : 0;
+void sendTelemetrySerial() {
+    char jbuf[160];
+    snprintf(jbuf, sizeof(jbuf),
+        "{\"device_id\":\"IoT_Shield_01\",\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
+        currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot, valLm35Temp);
+    Serial.println(jbuf);
+}
 
-    // Pin pulse diagnostics: p0 = pulse D0/measure D1, p1 = pulse D1/measure D0
-    if (c == 'p') {
-        if (sub == '0') return pingPair(D0, D1);
-        if (sub == '1') return pingPair(D1, D0);
-    }
+void processSerialCommand(const char* s) {
+    while (*s == ' ' || *s == '\t') s++;
+    char c = s[0];
+    if (c >= 'a' && c <= 'z') c -= 32;
+    if (c == '\0') return;
 
-    // Digital read diagnostics: r0=D0, r1=D1, r2=D2, r3=D3, r6=D6
-    if (c == 'r') {
-        if (sub == '0') return digitalRead(D0);
-        if (sub == '1') return digitalRead(D1);
-        if (sub == '2') return digitalRead(D2);
-        if (sub == '3') return digitalRead(D3);
-        if (sub == '6') return digitalRead(D6);
-    }
-
-    // Analog read diagnostics: a0=A0, a1=A1, a2=A2, a3=A3, a4=A4
-    if (c == 'a') {
-        if (sub == '0') return analogRead(A0);
-        if (sub == '1') return analogRead(A1);
-        if (sub == '2') return analogRead(A2);
-        if (sub == '3') return analogRead(A3);
-        if (sub == '4') return analogRead(A4);
-    }
-
-    // Mute / Unmute Buzzer
-    if (c == 'm') {
-        buzzerMuted = !buzzerMuted;
-        buzzerOff();
-        return buzzerMuted ? 10 : 11;
-    }
-    // Test Melodies: 't' or '1' = Welcome, 'k' = Motion chime, 's' = Siren
-    if (c == 't' || c == '1') {
-        playWelcomeChime();
-        return 1;
-    }
-    if (c == 'k') {
-        playMelodyMotion();
-        return 5;
-    }
-    if (c == 's') {
-        playIntrusionAlarm();
-        return 2;
-    }
-    // Silence All Alarms
-    if (c == '0' || c == 'o') {
+    if (c == '0' || c == 'O' || (c == 'A' && (s[6] == 'F' || s[6] == 'f')) || (c == 'S' && (s[1] == 'I' || s[1] == 'i'))) {
         forceAlarmOn = false;
         forceLightOn = false;
+        forceRgbColor = 0;
         buzzerOff();
         updateLeds(false, false, millis());
-        return 0;
-    }
-    // Toggle Light ON/OFF
-    if (c == 'l') {
+    } else if (c == 'A' && (s[6] == 'N' || s[6] == 'n')) {
+        forceAlarmOn = true;
+        playIntrusionAlarm();
+        updateLeds(true, false, millis());
+    } else if (c == '1' || c == 'T' || (c == 'B' && (s[7] == 'T' || s[7] == 't'))) {
+        playWelcomeChime();
+    } else if (c == 'K' || (c == 'B' && (s[7] == 'M' || s[7] == 'm'))) {
+        playMelodyMotion();
+    } else if (c == 'B' && (s[7] == 'S' || s[7] == 's')) {
+        playIntrusionAlarm();
+    } else if (c == 'M') {
+        buzzerMuted = !buzzerMuted;
+        buzzerOff();
+    } else if (c == 'L') {
         forceLightOn = !forceLightOn;
-        return forceLightOn ? 20 : 21;
-    }
-    // Swap Ultrasonic Trig / Echo pins dynamically ('u')
-    if (c == 'u') {
+    } else if (c == 'R' && (s[1] == 'G' || s[1] == 'g')) {
+        char col = s[4];
+        if (col >= 'a' && col <= 'z') col -= 32;
+        forceRgbColor = (col == 'R') ? 1 : (col == 'G') ? 2 : (col == 'B') ? 3 : 0;
+        updateLeds(false, false, millis());
+    } else if (c == 'P') {
+        if (s[1] == 'I' || s[1] == 'i') {
+            Serial.print("PONG:");
+            const char* p = s + 4;
+            if (*p == ':') p++;
+            Serial.println(*p ? p : "SPARK_CORE");
+            return;
+        }
+        if (s[1] == '0' || s[1] == '1') {
+            Serial.println(pingPair((s[1] == '1') ? D1 : D0, (s[1] == '1') ? D0 : D1));
+            return;
+        }
+    } else if (c == '?' || (c == 'S' && (s[1] == 'T' || s[1] == 't'))) {
+        sendTelemetrySerial();
+        return;
+    } else if (c == 'R' && s[1] >= '0' && s[1] <= '6') {
+        int pin = (s[1] == '1') ? D1 : (s[1] == '2') ? D2 : (s[1] == '3') ? D3 : (s[1] == '6') ? D6 : D0;
+        Serial.println(digitalRead(pin));
+        return;
+    } else if (c == 'A' && s[1] >= '0' && s[1] <= '4') {
+        int pin = (s[1] == '1') ? A1 : (s[1] == '2') ? A2 : (s[1] == '3') ? A3 : (s[1] == '4') ? A4 : A0;
+        Serial.println(analogRead(pin));
+        return;
+    } else if (c == 'U') {
         swapUltrasonicPins();
-        return (pinTrig == D0) ? 30 : 31;
-    }
-    // Probe Ultrasonic Distance
-    if (c == 'c') {
-        distHistory[0] = 150; distHistory[1] = 150; distHistory[2] = 150;
+        Serial.println((pinTrig == D0) ? 30 : 31);
+        return;
+    } else if (c == 'C') {
         int d = readUltrasonicDistanceCm();
         playTone(30, 2400);
-        return d;
+        Serial.println(d);
+        return;
     }
-    return -1;
+
+    Serial.println("OK");
 }
 
 // ----------------------------------------------------------------------------
@@ -537,8 +467,10 @@ void setup() {
     pinMode(PIN_LDR_A1,  INPUT);
     pinMode(PIN_LM35_A2, INPUT);
 
+#if ENABLE_TI_LINK
     // 6. TI-89 Titanium Link Port Setup (TX / RX)
     setupTiLink();
+#endif
 
     // 6a. USB Serial (115200 baud) — cloud-free direct telemetry bypass
     Serial.begin(115200);
@@ -547,15 +479,15 @@ void setup() {
     playWelcomeChime();
 
     // 8. Initial Sensor Samples (LM35 calibrated to normal ambient temperature)
+    distHistory[0] = 150;
+    currentDist  = 150;
+    currentMotion = 32;
     currentPot   = analogRead(PIN_POT_A0);
     currentLight = analogRead(PIN_LDR_A1);
-    valAuxA3     = 0;
-    valAuxA4     = 0;
     int initRawA2 = analogRead(PIN_LM35_A2);
-    float initLmMv = ((float)initRawA2 * 3300.0f) / 4095.0f;
-    float initCal = initLmMv / 16.8f; // ~520mV -> 31.0°C African room temperature baseline
-    if (initCal < 15.0f || initCal > 65.0f) initCal = 31.0f;
-    valLm35Temp  = (int)(initCal + 0.5f);
+    int initCal = (int)(((long)initRawA2 * 33000L) / 687960L);
+    if (initCal < 15 || initCal > 65) initCal = 31;
+    valLm35Temp  = initCal;
     lastReportedPot = currentPot;
     lastReportedLdr = currentLight;
 
@@ -585,6 +517,23 @@ void setup() {
 // ----------------------------------------------------------------------------
 void loop() {
     unsigned long now = millis();
+
+    // 0. Incoming USB Serial Command Receiver & Processor (Ultra-fast UI responses)
+    static char serialCmdBuf[64];
+    static uint8_t serialCmdIdx = 0;
+    while (Serial.available() > 0) {
+        char ch = (char)Serial.read();
+        if (ch == '\r') continue;
+        if (ch == '\n') {
+            serialCmdBuf[serialCmdIdx] = '\0';
+            if (serialCmdIdx > 0) {
+                processSerialCommand(serialCmdBuf);
+            }
+            serialCmdIdx = 0;
+        } else if (serialCmdIdx < sizeof(serialCmdBuf) - 1) {
+            serialCmdBuf[serialCmdIdx++] = ch;
+        }
+    }
 
     // IR Optical Receiver (Pin D6) - Continuous Sensing & Instant Re-triggering Engine
     // Keeps sensing continuously and re-triggers without going dormant or sleeping
@@ -632,14 +581,11 @@ void loop() {
 
         // Auxiliary analog samples & LM35 Temperature Calibration (A3/A4 isolated from ADC)
         int rawA2 = analogRead(PIN_LM35_A2);
-
-        float lm35Mv = ((float)rawA2 * 3300.0f) / 4095.0f;
-        // Calibrate LM35: on 9-in-1 shield, ~500-540mV maps to ~31.0°C African ambient room temperature
-        float calTemp = lm35Mv / 16.8f;
-        if (calTemp < 15.0f || calTemp > 65.0f) {
-            calTemp = 31.0f;
+        int calTemp = (int)(((long)rawA2 * 33000L) / 687960L);
+        if (calTemp < 15 || calTemp > 65) {
+            calTemp = 31;
         }
-        valLm35Temp = (int)(calTemp + 0.5f);
+        valLm35Temp = calTemp;
 
         if (!dhtSuccess && valLm35Temp >= 15 && valLm35Temp <= 45) {
             currentTemp = valLm35Temp;
@@ -735,21 +681,27 @@ void loop() {
         currentMotion = mask;
     }
 
-    // 4. Telemetry Broadcast every 15 seconds (ThingSpeak free-tier minimum)
-    if (now - lastPublishTime >= TELEMETRY_MS) {
-        lastPublishTime = now;
+    // 4. USB Serial Fast Telemetry Stream (10 Hz ultra-responsive 100ms stream + instant state-change burst)
+    static unsigned long lastSerialPublishTime = 0;
+    static int lastReportedDist = 0;
+    static int lastReportedMotion = 0;
+    bool stateChanged = (abs(currentDist - lastReportedDist) >= 2) || (currentMotion != lastReportedMotion);
 
-        // 4a. ThingSpeak HTTP POST (direct WiFi, no Particle Cloud)
-        publishToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
+    if ((now - lastSerialPublishTime >= 100) || (stateChanged && (now - lastSerialPublishTime >= 35))) {
+        lastSerialPublishTime = now;
+        lastReportedDist = currentDist;
+        lastReportedMotion = currentMotion;
 
-        // 4b. USB Serial JSON stream (local fallback, cloud-free)
-        char jbuf[256];
-        snprintf(jbuf, sizeof(jbuf),
-            "{\"device_id\":\"IoT_Shield_01\",\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
-            currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot, valLm35Temp);
-        Serial.println(jbuf);
+        sendTelemetrySerial();
     }
 
+    // 4a. ThingSpeak Telemetry Broadcast every 15 seconds (free-tier rate limit)
+    if (now - lastPublishTime >= TELEMETRY_MS) {
+        lastPublishTime = now;
+        publishToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
+    }
+
+#if ENABLE_TI_LINK
     // 5. TI-89 Titanium Offline Telemetry Feed (Every 500ms via TX/RX)
     static unsigned long lastTiSend = 0;
     if (now - lastTiSend >= 500) {
@@ -758,4 +710,5 @@ void loop() {
         bool isMotionActive = (now < motionHoldUntil || (digitalRead(PIN_IR_D6) == LOW));
         sendTiTelemetry(currentTemp, currentHum, currentDist, currentLight, isMotionActive, proxBreach);
     }
+#endif
 }
