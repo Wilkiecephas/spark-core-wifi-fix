@@ -743,9 +743,9 @@ void loop() {
         publishToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
 
         // 4b. USB Serial JSON stream (local fallback, cloud-free)
-        char jbuf[128];
+        char jbuf[256];
         snprintf(jbuf, sizeof(jbuf),
-            "{\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
+            "{\"device_id\":\"IoT_Shield_01\",\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
             currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot, valLm35Temp);
         Serial.println(jbuf);
     }
