@@ -1,0 +1,229 @@
+                                *******************
+                                * TILP II         *
+                                * Release notes   *
+                                *******************
+
+
+
+Old     version:  1.17  (2013/03/31)
+Current version:  1.18  (2016/11/01)
+
+
+TiLP is available for 4 platforms:
+Linux (GTK+/X11), Windows (GTK+/GDI), Mac OS-X (GTK+/X11) and FreeBSD (GTK+/X11).
+
+
+
+New capabilities:
+-----------------
+	- add proper support for the 84+CSE: models, ROM dumping, new file types (images), screenshot support
+	- add support for the 84+CE and 83PCE: models, new file types (especially OS and FlashApps), protocol changes (larger packet size, RclWindw, etc.), screenshot support, clock support
+	- add support for the 82A: model, new file types.
+	- add a number of helper functions for symmetry, add them to the torture tests.
+	- add per-handle pre / post receive and pre / post send hooks functionality, add corresponding torture tests.
+	- add DUSB packet dissection to libticalcs, already a superset of what libticables does for DUSB.
+	- add support for the 84+T: model.
+
+Improvements:
+-------------
+	- multiple cleanups in the repository: outdated branches and tags, add .gitignore, remove many auto-generated files
+	- multiple improvements in maintainer and user build scripts: better flags, build fixes, better wording and auto-detection capabilities, switch to libusb 1.0 by default.
+	- add Travis CI integration
+	- remove TRYC occurrences from libticables, in multiple passes.
+	- remove many TRYF occurrences from libticalcs, in multiple passes.
+	- update README / Changelog / AUTHORS files and have them use LF EOL, in multiple passes.
+	- add partial German translation, updated from Debian bug #588411 and contributed by Andreas B. Mundt.
+	- add dusb_recv_data_varsize() and dusb_cmd_r_screenshot() functions, with torture tests.
+	- libticonv, libtifiles, libticables (but not libticalcs, whose API exposes GNode directly): in order to prevent implicit overlinking, use more Requires.private in pkgconfig definitions, instead of Requires.
+	- add two commands for sending and reading generic data in NavNet format from a Nspire, similar to TI's TI_NN_Write and TI_NN_Read; reimplement echo commands using the new commands; add the new functions to torture test.
+	- in torture tests, print local traces to stderr instead of stdout. This restores `make check` output with recent autotools versions.
+	- harden and export cmd73, cmd80 and cmd89 functions; expand torture test.
+	- add support for several DBUS commands for the 83+ family: sending EKE, DKE, ELD, DLD, GID, RID and SID, and receiving SID. Use them in test_ticalcs_2, add them to torture test.
+	- in ti9x_charset, add a number of comments about Unicode characters which render better than the current choices. Discussed with Excale.
+	- apply downstream Debian patches for AArch64/Linux and GNU/Hurd compatibility from Albert Huang <alberth.debian@gmail.com> and Adam Conrad <adconrad@ubuntu.com>.
+	- harden cmd82, cmd85, cmd92 and export the corresponding headers; add torture tests for newly exported functions.
+	- refactor headers exporting internal ti*_{send,recv}_* functions; add extern "C" for C++ mode to multiple exported headers.
+	- attempt to support Intel Hex files with CR and LF line endings, since TI-Connect supports OS files with LF line endings. Reported by SirCmpwn.
+	- produce export (def) files on Win32.
+	- reformat the code in romdump.c, make most functions from romdump.c static.
+	- review error files. Have ticalcs_error_get() uniformly use g_strconcat/g_strdup like tifiles_error_get() and ticables_error_get(), instead of strcpy+strcat+g_strdup with a statically-sized buffer on the stack.
+	- add ticables_supported_cables() and ticalcs_supported_calcs() APIs, suggested by Jonimus.
+	- make several iteration variables unsigned after change in libtifiles; make TigEntry creation a bit more robust in gfm.
+	- use libticalcs' brand-new ticalcs_remap_model_{from,to}_usb() instead of own tilp_remap_{from,to}_usb().
+	- use ticalcs_remap_model_from_usb to select model in combobox.
+	- set increased timeouts for Flash transfers on all TI-8x models.
+	- remove special case handling of 83+/84+ appvars.
+	- use new ticables probing API for USB devices.
+	- add a bunch of machine IDs for communicating with CBL devices, found by CVSoft, Kerm and others.
+	- merge bsd/link_gry and bsd/link_ser into linux/link_gry and linux/link_ser, thereby reducing code duplication.
+	- add ticables_get_device() and ticables_set_device() APIs and corresponding functions in CableFncts. Suggested by Jonimus.
+	- reduce code duplication by consolidating cmd89.c and cmd92.c into a single cmd68k.c file. Constify a data pointer argument to several functions.
+	- reduce code duplication by consolidating cmd73.c, cmd80.c, cmd82.c and cmd85.c into a single cmdz80.c file. Constify a data pointer argument to several functions.
+	- reduce code duplication by factoring sanity checks to new VALIDATE_*() and RETURN_IF_HANDLE_*() macros.
+	- add ticables_free_usb_devices() as counterpart to ticables_get_usb_devices(); make it part of the public API; add torture test.
+	- handle version compatibility byte for 83+/84+ variables.
+	- use TIFL header to identify apps and OSes.
+	- define REJ_VERSION in dbus_pkt.h.
+	- minor non-functional improvements to data logging.
+	- new API for probing USB devices.
+	- export ERROR_EOT alongside ERROR_ABORT, it can be useful for some clients of the library. Suggested by Benjamin Moody.
+	- nested folders support for Nspires (SF feature request #3459852).
+	- add .send_all_vars_backup and .recv_all_vars_backup function pointers to CalcFncts; adjust all instances of CalcFncts; change the prototype of internal tixx_recv_all_vars_backup(); reduce code duplication by introducing noop_*() functions in calc_00.c, and use them from other calc_*.c files.
+	- add a product ID field to CalcFncts and instances thereof.
+	- move some file-static variables (long-standing gripes of multiple persons) to a new struct inside _CalcHandle or use what's available there; add dusb_set_buf_size(), suggested by Benjamin Moody.
+	- define attribute 0x13 as AID_ARCHIVED2.
+	- move the trivial functions (i.e. most functions) from rwfile.c to rwfile.h under inlinable form. While at it, make byte / character count arguments unsigned. Also, rwfile.c::hexdump() -> misc.c::tifiles_hexdump(), with size-limiting.
+	- move the trivial functions from types*.c to the corresponding types*.h under inlinable form. Synchronize the implementations.
+	- remove "XXx" file extensions for group and backup types on models which don't support them; make it possible to disable a number of file extension checks (for testing purposes); in tifiles_file_is_ti(), call tifiles_file_has_tifl_header().
+	- export several functions from filetypes.c to the public API, add torture tests.
+	- add several IDs to types84p.h; fix a couple 83PCE/84+CE file extensions; large refactoring in types*, reducing code duplication a lot.
+	- import several functions from libti* clients (tilp, titools). Most functions made and/or suggested by Benjamin Moody.
+	- add a set of certificate parsing functions, suggested by Benjamin Moody. Implementation sketched by Benjamin and Lionel.
+	- update CONFIG, promoting the group-less setup for modern udev-based distributions instead of the group-based setup.
+	- in the Windows installer, add Image and Lab Report types, add a bunch of file extensions; in the FD.o Desktop file, add Image, Matrix and Lab Report types, add a bunch of extensions.
+	- add ticalcs_infos_to_string() (formerly the bulk of tilp_calc_get_infos()), add torture test, use it in test_ticalcs_2, add translations.
+	- use new ticalcs_infos_to_string() API, where the bulk of tilp_calc_get_infos() was moved.
+	- libticalcs: add bitmap (screen) conversion functions, add ticalcs_calc_recv_screen_rgb888() and ticalcs_free_screen(), add torture tests, replace a number of Glib function calls by indirect equivalent calls.
+	- use the new bitmap (screen) conversion functions from libticalcs, where the relevant code from TILP was moved; maintainer and install script changes.
+	- modify desktop files to use PNG icons.
+	- add AppData files for tilp and gfm in desktop/.
+	- add FTS_NONSILENT in CalcFeatures; advertise it for the 82, 85, 89/92+/89T(DBUS)/V200 and 92.
+	- enable non-silent linking only for calculators which advertise non-silent linking. Indirectly reported by at least ShootPad, thesignal and Greg Williamson.
+	- quit using deprecated Glib functions;
+	- expand the documentation of ticalcs_calc_isready. Suggested by Benjamin Moody.
+	- add version field to backup files.
+	- support sending/receiving backup version number for 83+ DBUS.
+	- support sending backups to 84+ / 84+CSE / 82A / 84+T DUSB.
+	- in calc_*.c files for DBUS calculators, use macros for calls to cmd*.c files, so that it's easier to spot the differences, for later unification of (a subset of) the code. Squelch several occurrences of diff noise. Non-Functional Change.
+	- unify calc_82.c and calc_85.c, which are the closest calc_*.c files, as we knew. Remove all occurrences of TRYF from the merged file.
+	- unify calc_85.c and calc_86.c. Remove all occurrences of TRYF from the merged file.
+	- unify calc_80.c, calc_83.c and calc_86.c to calc_8x.c. Remove all occurrences of TRYF from the merged file.
+	- replace {snprintf,strncpy} + explicit termination by usage of new ticalcs_{slprintf,strlcpy} macros, as I should have done earlier (suggested by Benjamin Moody); include tiny pause.h and macros.h from internal.h; don't include ticonv.h explicitly, ticalcs.h depends on it through tifiles.h.
+	- unify calc_89.c and calc_92.c to calc_9x.c.
+	- remove all occurrences of TRYF from calc_9x.c.
+	- remove all occurrences of TRYF from calc_73.c, which completes, at long last, the TRYF removal work :)
+	- export Nspire RLE-compressed screen uncompression as ticalcs_screen_nspire_rle_uncompress() and 84+CSE RLE-compressed screen uncompression as ticalcs_screen_84pcse_rle_uncompress().
+	- inline our trivial logging functions, like in libti*.
+	- move libti* version check earlier in tilp_init.
+	- reformat and modernize the code in tilp_device.c; clean up several #if 1 / #if 0 blocks which have been this way for years.
+	- add a no-probe mode to test_ticalcs_2, so that e.g. dissection is available without a connected calculator.
+	- add comments containing data field offsets in files, so that they're easier to look up next time.
+	- in ticonv_varname_{to,from}_tifile, use CALC_TI84PC / CALC_TI84PC_USB instead of CALC_TI84P / CALC_TI84P_USB for CALC_TI84PC_USB, CALC_TI83PCE_USB and CALC_TI84PCE_USB. Suggested by Benjamin Moody, to pave the way for potential future color 84+ vs. monochrome 84+ changes.
+	- widen key codes argument of ticalcs_calc_send_key() and CalcFncts.send_key() from 16 to 32 bits, so that ticalcs_calc_send_key() can be used for Nspire keypresses.
+	- add Nspire key definitions file, use a mixture of generic and Nspire-specific send key in test_ticalcs_2.
+	- expose a bunch of tiz80_* and ti68k_* DBUS functions, which both raises flexibility and allows rewriting their callers as macros, factoring a bunch of (quasi-)duplicated code.
+	- factor out more code in cmd{z80,68k}.c, thanks to a new helper function.
+	- harden the code; add new "display" family functions and improve / update existing ones; factor out some code; remove unused FlashHeader struct. Changes made while investigating the crash in tifiles_content_dup_flash() fixed by a previous commit.
+	- round out the sets of tifiles_ve_create* and tifiles_fp_create* functions, deprecate a couple ones.
+	- lots of new DUSB parameter IDs, DUSB-related code hardening, new entries in InfosMask / CalcInfos, new functions related to DUSB vpkts, DUSB CAs, DUSB CPs, NSP vpkts, and the corresponding torture tests.
+	- use naming prefixes in dbus_pkt.h, dusb_cmd.h, nsp_cmd.h; fallout in other files.
+	- move tifiles_{model_to_string,string_to_model} to libticonv, add torture tests, forward from libtifiles.
+	- add clock support for the TI-eZ80 series; add and use dusb_cmd_s_param_set_r_data_ack() to factor some code, add torture test for it.
+	- upgrade InnoSetup scripts for newer libarchive DLL; synchronize GFM InnoSetup script with TILP InnoSetup script; enable experimental libticonv iconv interface in maintainer scripts.
+
+Bug fixes:
+----------
+	- remove outdated .desktop files for old versions of KDE.
+	- remove long-dead UsbKernel option from the cables list in the UI.
+	- fix a double free reported by aeTIos in the Nspire OS sending code, and a nearby memory leak while at it.
+	- fix wrong loop exit condition in tifiles_ve_delete_array(), noticed while making the hpfiles part of libhpcalcs.
+	- fix memory corruption with large FlashApps.
+	- fix buffer overflow spotted by AddressSanitizer.
+	- in test_ticalcs_2, make sure not to read past the bounds of the array of function pointers.
+	- kill a bunch of memory errors spotted by AddressSanitizer in the TI-Z80 and TI-68k calc_* and cmd* files;
+	- fix OS transfer on multiple TI-Z80 models. Patch by Jon Sturm, testing by him, Lionel and possibly others.
+	- fix romdump.c build after cmd73.h disappeared (the include wasn't needed anymore, at that); while at it, reformat the code, get rid of TRYF(...), make most functions from romdump.c static.
+	- build fixes for parallel make.
+	- in tilp_err(), call tifiles_error_get() instead of calling ticalcs_error_get() twice. Noticed during the making of libhpcalcs.
+	- remove usage of __DATE__ and __TIME__, which is of limited usefulness and makes builds trivially non-reproducible.
+	- fix "TiGroup" typos; rename TiGroup.ico to TIGroup.ico; copy Picture.ico to Image.ico.
+	- update AUTHORS files, make them all use LF EOL. Reported by Fabian "Vogtinator" Vogt and Adrien "Adriweb" Bertrand.
+	- attempt to cope with NULL CableFncts / CalcFncts pointers in improper CableHandle / CalcHandle structs.
+	- kick out remaining code for long-dead Linux-specific cable based on special device /dev/tiusb*.
+	- fix the prototype of multiple ti*_XDP functions, reported by Michael Tautschnig (TILP SF bug #216).
+	- libticalcs: replace all remaining calls to strcpy() by strncpy(), even where no overflow would occur; several drive-by fixes, e.g. left shifts with count larger than type width, or initialization of local char arrays by empty constant strings.
+	- fix a number of minor memory leaks and constify pid / aid arrays.
+	- fix e.g. many remaining left shifts with count larger than width of type, or minor memory leaks.
+	- fix a minor memory leak in ticables_probing_do().
+	- restore special-casing of ERR_EOT return value from dusb_cmd_r_var_header(), lost in a recent commit. Reported by Hooloovoo.
+	- fix handling of TI-83 files mislabeled as 83+ and vice versa.
+	- remove some unused and outdated data arrays.
+	- remove some now-unused lists of file extensions.
+	- fix packet size for TI84PC variable headers.
+	- fix dozens of more (UAF, DF, OOB accesses) or less (tiny memory leaks, dead code) severe issues reported by Coverity Scan. In the process, overhaul test_tifiles_2.c (not that it can actually run in a meaningful way), and add tifiles_free_table_of_entries() API. Several other issues found by code inspection.
+	- when using VALIDATE_*() and RETURN_IF_*() macros, postfix them by ;, and for good measure, wrap them into do { ... } while(0);. Suggested by Adrien "Adriweb" Bertrand and Benjamin Moody.
+	- switch to a single, unconditional definition of CalcModel in ticonv.h, include ticonv.h from tifiles.h. The libtifiles binaries have depended on libticonv for years. Suggested by Benjamin Moody.
+	- fix packet size for DUSB remote keypresses.
+	- use the correct full name for the V200 PLT. Reported by Adrien "Adriweb" Bertrand.
+	- on Windows, enable DTR power supply, to fix operation of some third-party GrayLink cables.
+	- make several function arguments const or unsigned, slightly proofread tigroup.c, add brackets around if / for bodies, whitespace changes.
+	- add a sanity check on FlashContent at three places, and fix the maximum size for a Flash variable on the TI-68k series.
+	- fix -Wmissing-prototypes warnings. Suggested by Benjamin Moody.
+	- fix the build on FreeBSD 10; cleanup for MacOS X (twice, Adrien "Adriweb" Bertrand reported a buggy change).
+	- fix memory leaks & memory errors in the torture tests and/or the libraries.
+	- fix two old bugs related to libusb 1.0 context teardown.
+	- scattered fixes resulting from Coverity Scan, afl-fuzz and code inspection.
+	- fix two sets of bugs reported by Benjamin Moody; reduce code duplication by introducing noop_*() functions in link_nul.c, and use them from other link_*.c files; remove long-dead src/win32/link_slv2.c file; whitespace changes.
+	- make FileContent.num_entries, FlashContent.num_pages, TigContent.n_vars, TigContent.n_apps, CableOptions.timeout, CableOptions.delay unsigned; have several functions of the API take or return unsigned int instead of int.
+	- omit harmful 'archived' attribute when deleting variables on DUSB calculators (84+ family, 83PCE/84+CE, 89T).
+	- fix a couple 83PCE/84+CE file extensions; large refactoring in types*, reducing code duplication a lot.
+	- fix a couple obvious errors in keys files.
+	- fill in TI-eZ80 support in dusb_vpkt.c::workaround_{send,recv}(): computer -> calculator needs ZLPs, but calculator -> computer doesn't. Reported by jacobly.
+	- fix a NULL pointer passed to memcpy in dusb_recv_data_varsize() flagged by ubsan; fix UMRs in dusb_cmd_r_var_header(); whitespace changes.
+	- in ti8x_file_write_regular(), do not take attr into account twice when computing checksum. Reported by jacobly.
+	- synchronize DUSB vpkt array in libticables; add several bounds checks; in torture_ticalcs, use several subroutines to improve maintainability, add torture tests and unit tests.
+	- in calc_84p.c::get_version(), add exact math retrieval, fix bpp, and add 83PCE/84+CE detection;
+	- replace deprecated AC_PROG_LIBTOOL with LT_INIT.
+	- inline our trivial logging functions, which enables checking arguments wrt. format (without putting format annotations, that is), fix several bugs uncovered by this change.
+	- in the Windows installer, replace DLLs with same version, upgrade GTK+2 runtime version and server location; in the FD.o Desktop file, fix a bunch of extensions.
+	- use correct length when receiving apps from 84+ DUSB.
+	- don't declare a struct serial_struct instance if the header defining its type is not available. Fixes a build error under Alpine Linux.
+	- update file types.
+	- fix integer conversions when parsing Z80 backup headers.
+	- for Z80 DBUS, allow embedded NULs in variable names.
+	- fix TI-73 and 83+ keycode definitions, and add new keycodes.
+	- correct format of 84+ DUSB remote keycode packets.
+	- fixes and improvements mainly in NSP code.
+	- fix VarEntry memory leaks, some of them pointed by Coverity.
+	- fix leaks and memory errors.
+	- move more globals to _CalcHandle for thread safety / independence of cable instances, which requires a bunch of API changes for passing CalcHandle *. Additionally, make a number of API parameters unsigned and fix the induced warnings.
+	- fix a couple UMRs, factor out a bit of code related to sending TI-Z80 DBUS backups, print decimal size at more places.
+	- allocate a second 65542-byte buffer for DBUS in CalcHandle, and use it at several places. Fixes TI-68k/DBUS transfer issues reported by Oliver "Boscop" Hoog.
+	- when checking the calc OS version, move the TI-68k check earlier. Fixes getting the clock, which worked fine with test_ticalcs_2. Reported by uyjulian.
+	- for now, revert to HTTP downloads for the GTK+ runtime, because most SF download mirrors don't support HTTPS (sigh); change output base file name to avoid DLL hijacking.
+	- synchronize send_var and send_var_ns implementations, fixing e.g. missing entry->action == ACT_SKIP checks or a missing pbar update; prevent nullptr derefs and OOB writes upon specially crafted FileContent instances, which might be passed directly to libticalcs, though libtifiles is not supposed to generate such invalid structs (and probably doesn't under normal conditions, given lack of bug reports).
+	- on MacOS X, force reenumeration upon device reset, because it isn't automatic, which breaks e.g. communication with the Nspire. Reported by STV and Adrien Bertrand.
+	- fix tifiles_content_dup_flash() to dup FlashContent.data_part for the TI-eZ80 series. Fixes a crash in TILP reported by JustRamon and the same crash in GFM noticed by Lionel while investigating.
+	- make it possible to transfer FlashApps contained in a tigroup. Noticed after fixing a bug in libtifiles reported by JustRamon.
+	- fixes for 84+(SE) DUSB and TI-eZ80 ROM dumping issues reported by Irrelium, Pie-jacke and Adriweb on IRC.
+	- avoid three nullptr derefs in libticonv iconv interface noticed by code inspection and one instance of unreachable code after return; add said interface to torture test (yielding two additional nullptr deref fixes...).
+	- comment out ID-List capability for the 83PCE and 84+CE. Reported by Adriweb, testing by Lionel unsurprisingly confirmed the issue.
+
+Known bugs:
+-----------
+
+	- [nspire] sometimes need to restart TiLP if connection fails
+	- [linux] Titanium DirectLink support works but:
+		* w/ libusb: you will have to replug link cable whenever you exit TiLP
+		=> this bug is due to the Titanium USB internal firmware
+
+
+Bug report:
+-----------
+
+If you think that you have found a bug, please report it. This allows us to 
+improve TiLP and make it better.
+
+
+Mailing:
+--------
+
+See the User's Manual...
+
+The TiLP project by the TiLP team <http://lpg.ticalc.org/prj_tilp>.
+
+
+Getting involved ?:
+-------------------
+
+See the Jobs section of the TiLP web site.

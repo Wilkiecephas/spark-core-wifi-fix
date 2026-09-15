@@ -1,0 +1,153 @@
+                                ***********
+                                * TILP II *
+                                ***********
+
+
+
+DESCRIPTION
+-----------
+
+TILP is a program allowing a computer to communicate with TI graphing
+calculators (TI-Z80, TI-68k and Nspire series).
+
+It works on Linux, Windows, Mac OS-X and FreeBSD platforms.
+See README.linux, README.win32 or README.freebsd according to your
+platform for more information.
+
+All physical link cables are supported by TILP: parallel, serial,
+BlackLink, GrayLink, AVRlink, SilverLink and DirectLink.
+TILP also support some virtual links: one for Virtual TI, the other one for
+TIEmu.
+
+Note1: the SilverLink cable may not work fine with TI-82/85.
+
+Supported calculators are: 
+	TI-73, TI-76.fr, TI-82 / TI-82 Stats(.fr), TI-83, TI-83+(SE), TI-84+(SE),
+	TI-84+ Pocket(.fr), TI-84+CSE, TI-84+CE, TI-83 Premium CE,
+	TI-82 Advanced, TI-84+T, TI-85, TI-86;
+	TI-89, TI-89 Titanium, TI-92, TI-92 II, TI-92+, V200;
+	Nspire Clickpad & Touchpad & CX & CM-C (CAS & non-CAS).
+
+
+FEATURES
+--------
+
+Note: some features may depend on the OS version.
+Be sure to have the latest OS version... *except on the Nspire*, because newer
+OS versions tend to contain unwanted changes (backwards incompatibilities in
+documents, anti-downgrade protections, fixes for vulnerabilities that allowed
+native code programs, etc.).
+
+NSpire (CAS):
+  - screen dump
+  - directory list
+  - sending/receiving/deleting file
+  - creating folders
+  - upgrading OS
+  - version
+  - remote control
+
+TI-89/TI-89 Titanium/TI-92+/V200:
+  - remote control of the calculator
+  - screen dump
+  - directory list
+  - sending/receiving/deleting variable
+  - sending/receiving backup
+  - ROM dump
+  - sending/receiving/deleting FLASH applications
+  - upgrading of Operating System (AMS)
+  - getting/setting time (requires AMS >= 2.08)
+
+TI-92:
+  - remote control of the calculator
+  - screen dump
+  - directory list
+  - sending/receiving/deleting variable
+  - sending/receiving backup
+  - ROM version
+  - ROM dump (FARGO II required)
+
+TI-86:
+  - screen dump
+  - sending/receiving backup (old & new ti86 calcs)
+  - sending/receiving variable
+  - TIGL file support
+  - ROM dump
+
+TI-85:
+  - screen dump
+  - sending/receiving backup
+  - sending/receiving variable
+  - TIGL file support
+  - ROM dump
+
+TI-83+/TI-84+ (normal and SE):
+  - screen dump
+  - directory list
+  - sending/receiving backup (archived vars are not backed up !)
+  - sending/receiving/deleting variable
+  - sending/receiving/deleting FLASH applications
+  - upgrading of Operating System (GRAPH EXPLORER SOFTWARE)
+  - ROM dump
+
+Note: the TI-83+ family is the only set to have a GROUP variable. TILP supports
+it in a specific way: this kind of var is saved as a single file as any other
+variable. Thus, if you send it, it will stay grouped on calc.
+The TI's software has a different way: it explodes the GROUP variable
+into a .8Xg group file and you lose the grouping on calculator.
+
+TI-83 / TI-82 Stats(.fr) / TI-76.fr:
+  - screen dump
+  - directory list
+  - sending/receiving variable
+  - sending/receiving backup
+  - TIGL file support
+  - ROM dump
+
+TI-82:
+  - screen dump
+  - sending/receiving variable
+  - sending/receiving backup
+  - TIGL files support
+  - ROM dump
+
+TI-73:
+  - screen dump
+  - directory list
+  - sending/receiving variable
+  - sending/receiving of FLASH applications
+  - upgrading of Operating System (GRAPH EXPLORER SOFTWARE)
+  - ROM dump
+
+
+AVAILABILITY
+------------
+
+  http://lpg.ticalc.org/prj_tilp 
+	(redirected from http://tilp.info)
+
+
+COPYRIGHT
+---------
+
+TILP is Copyright (C) 1999-2016 by the TILP team <tilp-users@lists.sf.net>.
+
+Copying is allowed under the terms of GNU General Public License.  
+See the file COPYING for more details.
+
+Texas Instruments and TI are trademarks of  Texas Instruments Incorporated.
+For more information: <http://education.ti.com/educationportal/sites/US/nonProductSingle/global_trademarks.html>
+This document has been written independantly of Texas Instruments.
+
+THANKS
+------
+
+See the THANKS file, please.
+
+
+----------------------------------------------------------------------
+Please report any bugs, questions, ...  
+(please give us your platform, your 
+calculator type (with ROM version) and your link cable model).
+
+The TILP team <tilp-users@lists.sf.net>.

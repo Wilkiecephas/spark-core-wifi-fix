@@ -31,6 +31,11 @@
 
 #include "application.h"
 
+// ============================================================================
+// CLOUD-FREE MODE — Bypass Particle Cloud entirely, use direct WiFi (ThingSpeak)
+// ============================================================================
+SYSTEM_MODE(MANUAL);
+
 // ----------------------------------------------------------------------------
 // PIN ASSIGNMENTS
 // ----------------------------------------------------------------------------
@@ -47,8 +52,10 @@ const int PIN_LED_D7      = D7;   // Spark Core Onboard Blue LED
 const int PIN_POT_A0      = A0;   // Rotary Potentiometer
 const int PIN_LDR_A1      = A1;   // LDR Light Sensor
 const int PIN_LM35_A2     = A2;   // LM35 Temperature Sensor
-const int PIN_AUX_A3      = A3;   // Aux Analog 1
-const int PIN_AUX_A4      = A4;   // Aux Analog 2
+// TI-89 Titanium Link Port (Dedicated TX/RX pins - 100% isolated from shield & ADC)
+const int PIN_TI_TIP      = TX;   // Tip  (Line 1 / Red)   -> Spark Core TX (PA9)
+const int PIN_TI_RING     = RX;   // Ring (Line 2 / White) -> Spark Core RX (PA10)
+
 
 // External RGB LED Outputs (A5-A7)
 const int PIN_RGB_RED     = A5;   // Red LED
@@ -59,7 +66,7 @@ const int PIN_RGB_BLUE    = A7;   // Blue LED
 const int PROXIMITY_ALERT_CM   = 20;    // Alert if obstacle < 20 cm (per user request)
 const unsigned long DHT_SAMPLE_MS     = 2500;  // DHT11 sample interval (2.5s)
 const unsigned long FAST_LOOP_MS      = 100;   // Fast loop (100ms - ultra-responsive)
-const unsigned long TELEMETRY_MS      = 10000; // Cloud publish interval (10s)
+const unsigned long TELEMETRY_MS      = 15000; // ThingSpeak publish interval (15s free-tier minimum)
 const unsigned long MOTION_HOLD_MS    = 1800;  // 1.8s hold for crisp, snappy motion triggers
 
 // State Variables (Published to Particle Cloud)
@@ -94,6 +101,65 @@ unsigned long lastPublishTime   = 0;
 // Filter history for distance (3 samples)
 int distHistory[3] = {150, 150, 150};
 int distHistIdx    = 0;
+
+// ----------------------------------------------------------------------------
+// TI-89 TITANIUM LINK PORT TELEMETRY DRIVER (DEDICATED TX / RX PINS)
+// ----------------------------------------------------------------------------
+void setupTiLink() {
+    pinMode(PIN_TI_TIP, INPUT_PULLUP);
+    pinMode(PIN_TI_RING, INPUT_PULLUP);
+}
+
+static inline void setTipLow()    { pinMode(PIN_TI_TIP, OUTPUT); digitalWrite(PIN_TI_TIP, LOW); }
+static inline void releaseTip()   { pinMode(PIN_TI_TIP, INPUT_PULLUP); }
+static inline bool readTip()      { return digitalRead(PIN_TI_TIP); }
+
+static inline void setRingLow()   { pinMode(PIN_TI_RING, OUTPUT); digitalWrite(PIN_TI_RING, LOW); }
+static inline void releaseRing()  { pinMode(PIN_TI_RING, INPUT_PULLUP); }
+static inline bool readRing()     { return digitalRead(PIN_TI_RING); }
+
+bool sendTiByte(uint8_t b) {
+    for (int i = 0; i < 8; i++) {
+        int bit = (b >> i) & 1;
+        unsigned long startUs = micros();
+        if (bit == 0) {
+            setTipLow();
+            while (readRing() == HIGH) {
+                if (micros() - startUs > 25000) { releaseTip(); return false; }
+            }
+            releaseTip();
+            while (readRing() == LOW) {
+                if (micros() - startUs > 50000) return false;
+            }
+        } else {
+            setRingLow();
+            while (readTip() == HIGH) {
+                if (micros() - startUs > 25000) { releaseRing(); return false; }
+            }
+            releaseRing();
+            while (readTip() == LOW) {
+                if (micros() - startUs > 50000) return false;
+            }
+        }
+    }
+    return true;
+}
+
+void sendTiTelemetry(int temp, int hum, int dist, int light, bool motion, bool breach) {
+    uint8_t alertMask = 0;
+    if (motion) alertMask |= 0x01;
+    if (breach) alertMask |= 0x02;
+
+    if (sendTiByte(0xAA)) {
+        sendTiByte((uint8_t)temp);
+        sendTiByte((uint8_t)hum);
+        sendTiByte((uint8_t)(dist >> 8));
+        sendTiByte((uint8_t)(dist & 0xFF));
+        sendTiByte((uint8_t)(light >> 8));
+        sendTiByte((uint8_t)(light & 0xFF));
+        sendTiByte(alertMask);
+    }
+}
 
 // ----------------------------------------------------------------------------
 // BUZZER MELODIC AUDIO ENGINE
@@ -316,7 +382,49 @@ bool readDHT11(int &outTemp, int &outHum) {
 }
 
 // ----------------------------------------------------------------------------
-// CLOUD COMMAND HANDLER
+// THINGSPEAK HTTP POST (Arduino-style WiFi, no Particle Cloud needed)
+// ----------------------------------------------------------------------------
+#define TS_WRITE_KEY  "2W20O13FTT3CIUD3"
+#define TS_HOST       "api.thingspeak.com"
+#define TS_PORT       80
+
+void publishToThingSpeak(int temp, int hum, int dist, int motion, int light, int pot) {
+    if (!WiFi.ready()) return;
+
+    TCPClient client;
+    if (!client.connect(TS_HOST, TS_PORT)) {
+        // WiFi ready but host unreachable — skip silently
+        return;
+    }
+
+    // Build URL-encoded POST body
+    char body[128];
+    snprintf(body, sizeof(body),
+        "api_key=%s&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d&field6=%d",
+        TS_WRITE_KEY, temp, hum, dist, motion, light, pot);
+
+    int bodyLen = strlen(body);
+
+    // HTTP/1.0 POST (Connection: close avoids keep-alive hang on CC3000)
+    client.println("POST /update HTTP/1.0");
+    client.println("Host: " TS_HOST);
+    client.println("Content-Type: application/x-www-form-urlencoded");
+    client.print("Content-Length: ");
+    client.println(bodyLen);
+    client.println();
+    client.print(body);
+
+    // Drain response non-blockingly (max 2 seconds)
+    unsigned long t0 = millis();
+    while (client.connected() && millis() - t0 < 2000) {
+        while (client.available()) client.read();
+        delay(10);
+    }
+    client.stop();
+}
+
+// ----------------------------------------------------------------------------
+// CLOUD COMMAND HANDLER (kept for Serial / local use)
 // ----------------------------------------------------------------------------
 int handleCommand(String args) {
     if (args.length() == 0) return -1;
@@ -424,21 +532,25 @@ void setup() {
     pinMode(PIN_IR_D6,  INPUT_PULLUP);
     pinMode(PIN_DHT11,  INPUT_PULLUP);
 
-    // 5. Analog Inputs (A0-A4)
+    // 5. Analog Inputs (A0-A2) - A3 & A4 isolated from ADC
     pinMode(PIN_POT_A0,  INPUT);
     pinMode(PIN_LDR_A1,  INPUT);
     pinMode(PIN_LM35_A2, INPUT);
-    pinMode(PIN_AUX_A3,  INPUT);
-    pinMode(PIN_AUX_A4,  INPUT);
 
-    // 6. Play Welcome Melodic Chime (Smooth harmonic sequence)
+    // 6. TI-89 Titanium Link Port Setup (TX / RX)
+    setupTiLink();
+
+    // 6a. USB Serial (115200 baud) — cloud-free direct telemetry bypass
+    Serial.begin(115200);
+
+    // 7. Play Welcome Melodic Chime (Smooth harmonic sequence)
     playWelcomeChime();
 
-    // 7. Initial Sensor Samples (LM35 calibrated to normal ambient temperature)
+    // 8. Initial Sensor Samples (LM35 calibrated to normal ambient temperature)
     currentPot   = analogRead(PIN_POT_A0);
     currentLight = analogRead(PIN_LDR_A1);
-    valAuxA3     = analogRead(PIN_AUX_A3);
-    valAuxA4     = analogRead(PIN_AUX_A4);
+    valAuxA3     = 0;
+    valAuxA4     = 0;
     int initRawA2 = analogRead(PIN_LM35_A2);
     float initLmMv = ((float)initRawA2 * 3300.0f) / 4095.0f;
     float initCal = initLmMv / 16.8f; // ~520mV -> 31.0°C African room temperature baseline
@@ -454,27 +566,24 @@ void setup() {
         currentTemp = 31; currentHum = 50;
     }
 
-    // 8. Register Particle Cloud Variables (Full Sensor Suite)
-    Particle.variable("temp",   currentTemp);
-    Particle.variable("hum",    currentHum);
-    Particle.variable("dist",   currentDist);
-    Particle.variable("motion", currentMotion);
-    Particle.variable("light",  currentLight);
-    Particle.variable("pot",    currentPot);
-    Particle.variable("temp2",  valLm35Temp);
-    Particle.variable("aux3",   valAuxA3);
-    Particle.variable("aux4",   valAuxA4);
-
-    // 9. Register Cloud Functions
-    Particle.function("alarm", handleCommand);
-    Particle.function("cmd",   handleCommand);
+    // 8. Connect directly to WiFi (no Particle Cloud — SYSTEM_MODE MANUAL)
+    RGB.color(255, 140, 0);  // Orange = connecting to WiFi
+    WiFi.connect();
+    unsigned long wifiStart = millis();
+    while (!WiFi.ready() && millis() - wifiStart < 15000) {
+        delay(200);
+    }
+    if (WiFi.ready()) {
+        RGB.color(0, 200, 100);  // Green = WiFi ready, ThingSpeak live
+    } else {
+        RGB.color(200, 0, 0);    // Red = WiFi failed, USB serial still active
+    }
 }
 
 // ----------------------------------------------------------------------------
 // MAIN LOOP
 // ----------------------------------------------------------------------------
 void loop() {
-    Particle.process();
     unsigned long now = millis();
 
     // IR Optical Receiver (Pin D6) - Continuous Sensing & Instant Re-triggering Engine
@@ -515,18 +624,14 @@ void loop() {
     if (now - lastDhtTime >= DHT_SAMPLE_MS) {
         lastDhtTime = now;
         int t = 0, h = 0;
-        Particle.process();
         bool dhtSuccess = (readDHT11(t, h) && t >= 5 && t <= 55);
-        Particle.process();
         if (dhtSuccess) {
             currentTemp = t;
             currentHum  = h;
         }
 
-        // Auxiliary analog samples & LM35 Temperature Calibration
+        // Auxiliary analog samples & LM35 Temperature Calibration (A3/A4 isolated from ADC)
         int rawA2 = analogRead(PIN_LM35_A2);
-        valAuxA3 = analogRead(PIN_AUX_A3);
-        valAuxA4 = analogRead(PIN_AUX_A4);
 
         float lm35Mv = ((float)rawA2 * 3300.0f) / 4095.0f;
         // Calibrate LM35: on 9-in-1 shield, ~500-540mV maps to ~31.0°C African ambient room temperature
@@ -547,7 +652,6 @@ void loop() {
 
         // A. Ultrasonic Distance Measurement
         currentDist = readUltrasonicDistanceCm();
-        Particle.process();
 
         // B. Continuous Fast Sampling of Analog Sensors (Potentiometer & LDR)
         currentPot   = analogRead(PIN_POT_A0);
@@ -631,12 +735,27 @@ void loop() {
         currentMotion = mask;
     }
 
-    // 4. Telemetry Broadcast every 10 seconds
+    // 4. Telemetry Broadcast every 15 seconds (ThingSpeak free-tier minimum)
     if (now - lastPublishTime >= TELEMETRY_MS) {
         lastPublishTime = now;
-        char payload[64];
-        snprintf(payload, sizeof(payload), "%d,%d,%d,%d,%d,%d",
-                 currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
-        Particle.publish("smartroom", payload, PRIVATE);
+
+        // 4a. ThingSpeak HTTP POST (direct WiFi, no Particle Cloud)
+        publishToThingSpeak(currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot);
+
+        // 4b. USB Serial JSON stream (local fallback, cloud-free)
+        char jbuf[128];
+        snprintf(jbuf, sizeof(jbuf),
+            "{\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
+            currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot, valLm35Temp);
+        Serial.println(jbuf);
+    }
+
+    // 5. TI-89 Titanium Offline Telemetry Feed (Every 500ms via TX/RX)
+    static unsigned long lastTiSend = 0;
+    if (now - lastTiSend >= 500) {
+        lastTiSend = now;
+        bool proxBreach = (currentDist > 0 && currentDist < PROXIMITY_ALERT_CM);
+        bool isMotionActive = (now < motionHoldUntil || (digitalRead(PIN_IR_D6) == LOW));
+        sendTiTelemetry(currentTemp, currentHum, currentDist, currentLight, isMotionActive, proxBreach);
     }
 }
