@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "author": "Group 4 - KyU (TETE 3102)",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-stm32-bluepill",
+      "id": "stm32",
+      "top": 0,
+      "left": 0
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -200,
+      "left": -60,
+      "attrs": {
+        "pins": "i2c"
+      }
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc",
+      "top": -180,
+      "left": 260
+    }
+  ],
+  "connections": [
+    [
+      "stm32:GND.1",
+      "lcd:GND",
+      "black",
+      [
+        "v-30",
+        "h-60"
+      ]
+    ],
+    [
+      "stm32:5V.1",
+      "lcd:VCC",
+      "red",
+      [
+        "v-40",
+        "h-40"
+      ]
+    ],
+    [
+      "stm32:B7",
+      "lcd:SDA",
+      "blue",
+      [
+        "v-60",
+        "h20"
+      ]
+    ],
+    [
+      "stm32:B6",
+      "lcd:SCL",
+      "yellow",
+      [
+        "v-70",
+        "h30"
+      ]
+    ],
+    [
+      "stm32:GND.1",
+      "rtc:GND",
+      "black",
+      [
+        "v-30",
+        "h200"
+      ]
+    ],
+    [
+      "stm32:5V.1",
+      "rtc:5V",
+      "red",
+      [
+        "v-40",
+        "h220"
+      ]
+    ],
+    [
+      "stm32:B7",
+      "rtc:SDA",
+      "blue",
+      [
+        "v-60",
+        "h250"
+      ]
+    ],
+    [
+      "stm32:B6",
+      "rtc:SCL",
+      "yellow",
+      [
+        "v-70",
+        "h270"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

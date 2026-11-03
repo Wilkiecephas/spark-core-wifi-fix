@@ -1,0 +1,183 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 7}{Inter-Platform Link: STM32 Master to Arduino Uno Slave}
+
+\begin{objectivebox}
+The objective of this laboratory task is to construct a heterogeneous, multi-voltage embedded communication link between a 32-bit ARM Cortex-M4 master (STM32F411RE at $3.3\text{ V}$) and an 8-bit AVR slave (Arduino Uno at $5.0\text{ V}$). Students implement bidirectional MOSFET level shifting, configure interrupt-driven slave event handlers (`onReceive` and `onRequest`), stream real-time analog potentiometer telemetry, render dynamic LCD bargraphs, and analyze clock stretching mechanics.
+\end{objectivebox}
+
+% =========================================================================
+\section{Hardware Interfacing \& Level Shifting}
+% =========================================================================
+Because the Arduino Uno operates at $5.0\text{ V}$ and the STM32 operates at $3.3\text{ V}$, direct connection without isolation risks forward-biasing the internal protection diodes or injecting leakage current into $3.3\text{ V}$ rails. A bidirectional MOSFET level shifter circuit (N-channel BSS138) bridges the two domains.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Heterogeneous Master-Slave Interconnection Topology}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l l l X}
+\toprule
+\textbf{STM32 Master Pin} & \textbf{Level Shifter Pin} & \textbf{Arduino Slave Pin} & \textbf{Electrical Isolation / Function} \\
+\midrule
++3.3V Rail & LV (Low Voltage Reference) & --- & Powers the 3.3V side gate bias \\
+--- & HV (High Voltage Reference) & +5V Rail & Powers the 5V side gate bias \\
+GND & GND & GND & Mandatory common electrical reference ground \\
+PB8 (I2C1\_SCL) & LV1 $\longleftrightarrow$ HV1 & Pin A5 (SCL) & Bidirectional clock line with level conversion \\
+PB9 (I2C1\_SDA) & LV2 $\longleftrightarrow$ HV2 & Pin A4 (SDA) & Bidirectional data line with level conversion \\
+User Button (PC13) & --- & Built-in LED (Pin 13) & Master user input toggles remote slave actuator \\
+LCD1602 (PB8/PB9) & --- & Potentiometer (A0) & Local LCD displays remote analog telemetry \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% =========================================================================
+\section{Firmware Implementation}
+% =========================================================================
+
+\subsection{Arduino Uno Slave Firmware (Wire Event Driven)}
+The Arduino functions as an $\text{I}^2\text{C}$ slave with 7-bit address \texttt{0x08}. It attaches hardware ISR callbacks: \texttt{receiveEvent} processes master command bytes, while \texttt{requestEvent} streams ADC readings.
+
+\begin{lstlisting}[language=C++, caption={Arduino Uno I2C Slave Implementation (Address 0x08)}]
+#include <Wire.h>
+
+const byte SLAVE_ADDR = 0x08;
+const int POT_PIN = A0;
+const int LED_PIN = 13; // Built-in LED
+
+volatile byte led_state = 0;
+
+void receiveEvent(int howMany) {
+  while (Wire.available()) {
+    byte cmd = Wire.read();
+    if (cmd == 0x01) {
+      led_state = 1;
+      digitalWrite(LED_PIN, HIGH);
+    } else if (cmd == 0x00) {
+      led_state = 0;
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+}
+
+void requestEvent() {
+  // Read 10-bit ADC (0-1023) and scale to 8 bits (0-255)
+  uint8_t pot_val = (uint8_t)(analogRead(POT_PIN) >> 2);
+  Wire.write(pot_val); // Transmit telemetry to master
+}
+
+void setup() {
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  Wire.begin(SLAVE_ADDR);
+  Wire.onReceive(receiveEvent);
+  Wire.onRequest(requestEvent);
+}
+
+void loop() {
+  // Keep loop empty; all I2C transactions handled via interrupts
+}
+\end{lstlisting}
+
+\subsection{STM32 Master Control Loop \& Dynamic Bargraph Display}
+The STM32 acts as master, reading the onboard push-button (PC13) to toggle the Arduino's LED, polling the Arduino's potentiometer reading every $200\text{ ms}$, and rendering an interactive visual bar on the LCD.
+
+\begin{lstlisting}[language=C, caption={STM32 Master Firmware with Bargraph Rendering}]
+#define ARDUINO_ADDR (0x08 << 1) // 7-bit 0x08 shifted to 0x10
+
+void render_bargraph(uint8_t val) {
+    char bar[17];
+    uint8_t num_chars = (val * 16) / 255;
+    for (uint8_t i = 0; i < 16; i++) {
+        bar[i] = (i < num_chars) ? 0xFF : ' '; // 0xFF is solid black block on HD44780
+    }
+    bar[16] = '\0';
+    lcd_set_cursor(1, 0);
+    lcd_print(bar);
+}
+
+void master_telemetry_loop(void) {
+    uint8_t tx_cmd = 0;
+    uint8_t rx_pot = 0;
+    char text[17];
+
+    while (1) {
+        /* 1. Check user button (active LOW) to toggle remote Arduino LED */
+        if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
+            tx_cmd ^= 0x01; // Toggle state
+            HAL_I2C_Master_Transmit(&hi2c1, ARDUINO_ADDR, &tx_cmd, 1, 50);
+            HAL_Delay(250); // Debounce delay
+        }
+
+        /* 2. Read 8-bit potentiometer telemetry from Arduino slave */
+        if (HAL_I2C_Master_Receive(&hi2c1, ARDUINO_ADDR, &rx_pot, 1, 50) == HAL_OK) {
+            snprintf(text, sizeof(text), "POT VAL: %3d/255", rx_pot);
+            lcd_set_cursor(0, 0);
+            lcd_print(text);
+            render_bargraph(rx_pot);
+        } else {
+            lcd_set_cursor(0, 0); lcd_print("SLAVE DISCONNECT");
+            lcd_set_cursor(1, 0); lcd_print("STATUS: TIMEOUT ");
+        }
+
+        HAL_Delay(200);
+    }
+}
+\end{lstlisting}
+
+% =========================================================================
+\section{Bus Frame Diagrams}
+% =========================================================================
+
+\subsubsection*{1. Master Write Frame (Toggle Command)}
+\begin{center}
+\small
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{S} & \textbf{Slave Address + W (\texttt{0x10})} & \textbf{ACK} & \textbf{Command Byte (\texttt{0x01} / \texttt{0x00})} & \textbf{ACK} & \textbf{P} \\
+\hline
+Master & Master ($0001\;0000_2$) & Slave & Master & Slave & Master \\
+\hline
+\end{tabular}
+\end{center}
+
+\subsubsection*{2. Master Read Frame (Potentiometer Telemetry)}
+\begin{center}
+\small
+\begin{tabular}{|c|c|c|c|c|c|c|}
+\hline
+\textbf{S} & \textbf{Slave Address + R (\texttt{0x11})} & \textbf{ACK} & \textbf{Data Byte (e.g. \texttt{0x80})} & \textbf{NACK} & \textbf{P} \\
+\hline
+Master & Master ($0001\;0001_2$) & Slave & Slave & Master & Master \\
+\hline
+\end{tabular}
+\end{center}
+
+% =========================================================================
+\section{Mandatory Task Questions \& Detailed Solutions}
+% =========================================================================
+
+\begin{questionbox}{1}
+\textbf{Which side stretches the clock, if any, and why?}
+\end{questionbox}
+\textbf{Answer:} The \textbf{Arduino Uno slave} stretches the clock. When the STM32 master completes transmitting the address byte (\texttt{0x11}), the AVR hardware asserts an interrupt request. The ATmega328P hardware holds the SCL line LOW while invoking the interrupt service routine (`requestEvent`). Because SCL is open-drain, the master cannot drive SCL HIGH until the AVR ISR finishes writing the data byte into the `TWDR` (Two-Wire Data Register) and clears the `TWINT` flag, which releases SCL.
+
+\begin{questionbox}{2}
+\textbf{What happens if the Arduino slave is physically powered off? What exact HAL status and error flags are returned to the STM32?}
+\end{questionbox}
+\textbf{Answer:} When the Arduino slave is unpowered:
+\begin{itemize}
+    \item \textbf{Physical Wire State:} Address byte \texttt{0x10} or \texttt{0x11} is pulsed onto the bus, but no device pulls SDA low on the 9th clock. SDA floats HIGH via the pull-up resistor (NACK).
+    \item \textbf{Returned Function Status:} \texttt{HAL\_I2C\_Master\_Transmit} and \texttt{HAL\_I2C\_Master\_Receive} return \textbf{\texttt{HAL\_ERROR}} (\texttt{0x01}).
+    \item \textbf{Underlying Hardware Error Flag:} Inspecting the handle via \texttt{HAL\_I2C\_GetError(\&hi2c1)} returns \textbf{\texttt{HAL\_I2C\_ERROR\_AF}} (\texttt{0x04}, Acknowledge Failure).
+\end{itemize}
+
+% =========================================================================
+\section{Conclusion}
+% =========================================================================
+Task 7 proves the robustness of the $\text{I}^2\text{C}$ multi-voltage architecture. With appropriate MOSFET level shifting and interrupt-driven firmware, heterogeneous microcontrollers exchange commands and telemetry reliably without bus conflicts or clock desynchronization.
+
+\end{document}

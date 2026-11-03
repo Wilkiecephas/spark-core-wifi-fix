@@ -1,0 +1,127 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 6}{Systematic I2C Bus Fault Finding \& Diagnostic Matrix}
+
+\begin{objectivebox}
+The objective of this laboratory task is to develop and apply a systematic troubleshooting methodology for identifying, diagnosing, and resolving physical, electrical, and firmware faults on an $\text{I}^2\text{C}$ bus. Using return codes, bus scanners, and mixed-signal oscilloscope probing, students isolate six real-world failure modes and document corrective actions in an engineering fault matrix.
+\end{objectivebox}
+
+% =========================================================================
+\section{Troubleshooting Methodology}
+% =========================================================================
+Diagnosing $\text{I}^2\text{C}$ anomalies follows a three-stage hierarchical workflow:
+\begin{enumerate}
+    \item \textbf{Layer 1: Software Return Status \& Error Flags:} Interrogate return codes from \texttt{HAL\_I2C\_GetError()} or Arduino \texttt{Wire.endTransmission()} to distinguish between address NACK, data NACK, and timeouts.
+    \item \textbf{Layer 2: Bus Scanner Interrogation:} Determine whether individual devices respond, the entire bus is dead, or ghost devices appear across reserved address ranges.
+    \item \textbf{Layer 3: Physical Signal Integrity Inspection:} Probe SDA and SCL using an oscilloscope to verify idle voltage rails, rise times, ground reference integrity, and line transitions.
+\end{enumerate}
+
+% =========================================================================
+\section{Comprehensive Fault Diagnostic Matrix}
+% =========================================================================
+
+\begin{table}[h!]
+\centering
+\scriptsize
+\caption{Systematic Diagnostic Matrix for the Six Injected Bus Faults}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{p{2.3cm} p{2.5cm} p{2.2cm} p{2.6cm} X}
+\toprule
+\textbf{Injected Fault} & \textbf{Observed Symptoms} & \textbf{Return Code / Error Flag} & \textbf{Test Equipment Observation} & \textbf{Corrective Action (Fix)} \\
+\midrule
+\textbf{1. Wrong Address} \newline (\texttt{0x3F} instead of \texttt{0x27}) 
+    & LCD remains completely uninitialized and blank; scanner finds device only at \texttt{0x27}. 
+    & STM32: \texttt{HAL\_ERROR} (\texttt{HAL\_I2C\_ERROR\_AF}). \newline Arduino: Code \textbf{2} (\texttt{NACK on addr}). 
+    & Scope reveals 8 address bits pulsed, followed by SDA remaining HIGH on 9th clock (no slave pulls down). 
+    & Run bus scanner to determine true physical address; update \texttt{\#define LCD\_ADDR} to matching address. \\
+\midrule
+\textbf{2. Address Not Shifted on STM32} \newline (\texttt{0x27} passed instead of \texttt{0x27 << 1}) 
+    & STM32 program fails immediately on first transmit; Arduino code works perfectly with identical hardware. 
+    & STM32: \texttt{HAL\_ERROR} (\texttt{HAL\_I2C\_ERROR\_AF}). 
+    & Scope decodes the wire address as \texttt{0x13} with $R/\overline{W}=1$ (Read). Slave ignores transmission. 
+    & Shift the 7-bit address left by 1 bit: `(0x27 << 1) = 0x4E` before passing to STM32 HAL functions. \\
+\midrule
+\textbf{3. SDA and SCL Lines Swapped} 
+    & Bus scanner reports no devices found or hangs; LCD and RTC completely unresponsive. 
+    & STM32: \texttt{HAL\_BUSY} or \texttt{HAL\_TIMEOUT}. \newline Arduino: Code \textbf{4} or \textbf{5}. 
+    & Scope shows clock pulses on the slave's SDA pin while SCL remains static high. 
+    & Trace physical breadboard wiring; swap jumper connections to ensure MCU SCL $\to$ Slave SCL and SDA $\to$ SDA. \\
+\midrule
+\textbf{4. One / Both Pull-Up Resistors Removed} 
+    & With one removed: high-speed data corrupts. With both removed: bus completely dead. 
+    & STM32: \texttt{HAL\_TIMEOUT} or \texttt{HAL\_I2C\_ERROR\_TIMEOUT}. 
+    & Scope shows lines floating down to $0\text{ V}$ or displaying severely deformed rise times ($> 5\,\mu\text{s}$). 
+    & Install external $2.2\text{ k}\Omega$ to $4.7\text{ k}\Omega$ pull-up resistors from SDA and SCL to the $3.3\text{ V}$ or $5\text{ V}$ rail. \\
+\midrule
+\textbf{5. Address Conflict} \newline (Two PCF8574 backpacks set to \texttt{0x27}) 
+    & Both displays show garbled, flickering characters; cursor commands fail unpredictably. 
+    & May return \texttt{HAL\_OK} (both ACK), but data corruption occurs. 
+    & Both devices pull SDA low simultaneously during data read; bus contentions observable on scope. 
+    & Solder address jumper A0 on the second backpack to change its hardware address to \texttt{0x26} or \texttt{0x25}. \\
+\midrule
+\textbf{6. Voltage Mismatch} \newline (5V pull-ups to non-tolerant pin) 
+    & Communication may function briefly; risk of excessive leakage current or pin clamp conduction. 
+    & Intermittent bit errors due to disparate logic thresholds. 
+    & Multimeter measures $5.0\text{ V}$ on STM32 pin. Scope shows logic high levels overshooting $3.6\text{ V}$. 
+    & Insert a bidirectional MOSFET logic-level converter ($3.3\text{ V} \leftrightarrow 5.0\text{ V}$) or pull resistors to $3.3\text{ V}$. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% =========================================================================
+\section{In-Depth Fault Analysis: The Bus Recovery Routine}
+% =========================================================================
+\begin{troublebox}
+\textbf{The "Stuck SDA" Lockup Condition:} A notorious $\text{I}^2\text{C}$ failure occurs when the master resets mid-byte while a slave is transmitting a logic $0$. Because the slave is waiting for clock pulses that never arrive, it holds SDA LOW indefinitely. The master powers up, senses SDA LOW, detects a "Bus Busy" condition, and refuses to initiate communication.
+\end{troublebox}
+
+\subsubsection*{Software Bus Clearing Algorithm (Clock Toggling Recovery)}
+When \texttt{HAL\_I2C\_Init()} returns \texttt{HAL\_BUSY}, execute this 9-pulse clock clearing sequence:
+
+\begin{lstlisting}[language=C, caption={Robust I2C Bus Recovery Routine for STM32}]
+void I2C_Bus_Recovery(void) {
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    /* 1. De-initialize I2C1 peripheral */
+    HAL_I2C_DeInit(&hi2c1);
+
+    /* 2. Configure SCL (PB8) and SDA (PB9) as GPIO Open-Drain Outputs */
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* 3. If SDA is held low by a locked slave, clock SCL up to 9 times */
+    for (uint8_t i = 0; i < 9; i++) {
+        if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_9) == GPIO_PIN_SET) {
+            break; // Slave released SDA!
+        }
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_RESET);
+        for(volatile int d=0; d<100; d++);
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+        for(volatile int d=0; d<100; d++);
+    }
+
+    /* 4. Generate a clean STOP condition manually */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+    for(volatile int d=0; d<100; d++);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8, GPIO_PIN_SET);
+    for(volatile int d=0; d<100; d++);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_SET); // SDA rises while SCL high
+
+    /* 5. Re-initialize I2C1 peripheral in CubeMX mode */
+    MX_I2C1_Init();
+}
+\end{lstlisting}
+
+% =========================================================================
+\section{Conclusion}
+% =========================================================================
+Structured fault isolation confirms that software return codes provide the first line of defense, but physical test instruments (oscilloscopes and multimeters) are indispensable for diagnosing analog pull-up, wiring, and bus lockup anomalies.
+
+\end{document}

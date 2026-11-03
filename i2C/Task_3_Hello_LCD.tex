@@ -1,0 +1,202 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 3}{Character LCD1602 Interfacing via PCF8574 I2C Backpack}
+
+\begin{objectivebox}
+The objective of this laboratory task is to interface an alphanumeric HD44780-compatible $16\times 2$ character LCD over the $\text{I}^2\text{C}$ bus using a PCF8574 8-bit expander backpack. Students analyze 4-bit nibble packetization, evaluate address mismatch fault handling, implement dynamic horizontal text scrolling, and calculate wire-level transmission throughput and display refresh bandwidth.
+\end{objectivebox}
+
+% =========================================================================
+\section{Hardware Architecture \& Backpack Mapping}
+% =========================================================================
+The standard Hitachi HD44780 LCD controller requires a minimum of 6 control/data lines in 4-bit parallel mode ($\text{RS}, \text{E}, \text{D}_4, \text{D}_5, \text{D}_6, \text{D}_7$). The "1602 IIC" backpack employs a PCF8574 remote 8-bit I/O expander to bridge the two-wire $\text{I}^2\text{C}$ bus to the parallel LCD interface pins.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{PCF8574 Output Pin to HD44780 LCD Signal Mapping}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c X}
+\toprule
+\textbf{PCF8574 Port} & \textbf{Bit Mask} & \textbf{LCD Signal} & \textbf{Functional Description} \\
+\midrule
+$P_0$ & \texttt{0x01} & \textbf{RS} (Register Select) & \texttt{0} = Command Register, \texttt{1} = Data (Character) Register \\
+$P_1$ & \texttt{0x02} & \textbf{RW} (Read/Write) & Held permanently at \texttt{0} (Write mode only) \\
+$P_2$ & \texttt{0x04} & \textbf{E} (Enable) & High-to-Low transition ($E \downarrow$) latches data on $D_4\text{--}D_7$ \\
+$P_3$ & \texttt{0x08} & \textbf{Backlight} & Controls NPN transistor for LED backlight (\texttt{1} = ON, \texttt{0} = OFF) \\
+$P_4$ & \texttt{0x10} & \textbf{D4} & LCD Data Bit 4 \\
+$P_5$ & \texttt{0x20} & \textbf{D5} & LCD Data Bit 5 \\
+$P_6$ & \texttt{0x40} & \textbf{D6} & LCD Data Bit 6 \\
+$P_7$ & \texttt{0x80} & \textbf{D7} & LCD Data Bit 7 (also Busy Flag $BF$ in read mode) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{theorybox}
+\textbf{Enable Latch Timing Physics:} To transfer one byte to the LCD in 4-bit mode, the byte is partitioned into two 4-bit nibbles. Each nibble is sent twice: first with $E=1$ (\texttt{0x04}), then with $E=0$. The falling edge of $E$ latches the nibble into the LCD. Because each $\text{I}^2\text{C}$ byte transfer over a $100\text{ kHz}$ bus takes $90\,\mu\text{s}$, it inherently satisfies the HD44780 minimum enable pulse width ($t_{w(E)} \ge 450\text{ ns}$) without requiring microsecond delay instructions.
+\end{theorybox}
+
+% =========================================================================
+\section{Firmware Implementation}
+% =========================================================================
+
+\subsection{Platform 1: STM32 HAL Low-Level Driver (main.c)}
+In the STM32 HAL implementation, we construct an atomic 4-byte buffer for every character: $[ \text{High Nibble }|\; E, \; \text{High Nibble}, \; \text{Low Nibble }|\; E, \; \text{Low Nibble} ]$ and transmit it in a single $\text{I}^2\text{C}$ transaction.
+
+\begin{lstlisting}[language=C, caption={STM32 HAL PCF8574 LCD Driver with Scrolling Support}]
+#define LCD_ADDR (0x27 << 1) // 7-bit 0x27 shifted left by 1
+#define LCD_RS   0x01
+#define LCD_EN   0x04
+#define LCD_BL   0x08
+
+static void lcd_nibble(uint8_t nib, uint8_t rs) {
+    uint8_t v = (uint8_t)((nib << 4) | LCD_BL | (rs ? LCD_RS : 0));
+    uint8_t d[2] = { (uint8_t)(v | LCD_EN), v };
+    HAL_I2C_Master_Transmit(&hi2c1, LCD_ADDR, d, 2, 50);
+}
+
+static void lcd_byte(uint8_t b, uint8_t rs) {
+    uint8_t hi = (uint8_t)((b & 0xF0) | LCD_BL | (rs ? LCD_RS : 0));
+    uint8_t lo = (uint8_t)(((b << 4) & 0xF0) | LCD_BL | (rs ? LCD_RS : 0));
+    uint8_t d[4] = { (uint8_t)(hi | LCD_EN), hi, (uint8_t)(lo | LCD_EN), lo };
+    HAL_I2C_Master_Transmit(&hi2c1, LCD_ADDR, d, 4, 50);
+}
+
+void lcd_init(void) {
+    HAL_Delay(50);
+    lcd_nibble(0x03, 0); HAL_Delay(5);
+    lcd_nibble(0x03, 0); HAL_Delay(1);
+    lcd_nibble(0x03, 0); HAL_Delay(1);
+    lcd_nibble(0x02, 0); HAL_Delay(1); // Force 4-bit mode
+    lcd_byte(0x28, 0); // 4-bit mode, 2-line display, 5x8 font
+    lcd_byte(0x0C, 0); // Display ON, Cursor OFF, Blink OFF
+    lcd_byte(0x01, 0); HAL_Delay(2); // Clear display
+    lcd_byte(0x06, 0); // Entry mode: increment cursor
+}
+
+void lcd_set_cursor(uint8_t row, uint8_t col) {
+    lcd_byte((uint8_t)(0x80 | (row ? 0x40 : 0x00) | col), 0);
+}
+
+void lcd_print(const char *s) {
+    while (*s) lcd_byte((uint8_t)*s++, 1);
+}
+
+/* Horizontal scrolling implementation for strings > 16 characters */
+void lcd_scroll_message(uint8_t row, const char *msg, uint16_t delay_ms) {
+    int len = strlen(msg);
+    char window[17];
+    for (int i = 0; i <= len - 16; i++) {
+        strncpy(window, msg + i, 16);
+        window[16] = '\0';
+        lcd_set_cursor(row, 0);
+        lcd_print(window);
+        HAL_Delay(delay_ms);
+    }
+}
+\end{lstlisting}
+
+\subsection{Platform 2: Arduino Uno Sketch (Wire + LiquidCrystal\_I2C)}
+\begin{lstlisting}[language=C++, caption={Arduino Uno LCD Program with Dynamic Scrolling}]
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+const char line1_msg[] = "Hello, Uganda";
+const char scroll_msg[] = "    Kyambogo University Dept of EEE - TETE 3102 Microcontrollers    ";
+
+void setup() {
+  Serial.begin(115200);
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print(line1_msg);
+}
+
+void loop() {
+  int len = strlen(scroll_msg);
+  char window[17];
+  for (int i = 0; i <= len - 16; i++) {
+    strncpy(window, scroll_msg + i, 16);
+    window[16] = '\0';
+    lcd.setCursor(0, 1);
+    lcd.print(window);
+    delay(300);
+  }
+}
+\end{lstlisting}
+
+% =========================================================================
+\section{Fault Injection: Address Mismatch Investigation}
+% =========================================================================
+In this experiment, the code was deliberately reconfigured with an incorrect address (\texttt{0x28} instead of \texttt{0x27}).
+
+\begin{table}[h!]
+\centering
+\small
+\caption{System Behavior Under Address Mismatch (\texttt{0x28})}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{4.5cm} p{4.5cm} X}
+\toprule
+\textbf{Platform} & \textbf{Function Call} & \textbf{Returned Status Code} & \textbf{Physical Observation \& Bus State} \\
+\midrule
+\textbf{STM32 HAL} 
+    & \texttt{HAL\_I2C\_Master\_Transmit} 
+    & \texttt{HAL\_ERROR} (\texttt{0x01}) \newline Error Flag: \texttt{HAL\_I2C\_ERROR\_AF} (\texttt{0x04}) 
+    & The LCD remains completely blank or shows dark contrast blocks. No ACK is generated on the 9th clock cycle of the address byte. The transmission aborts immediately. \\
+\midrule
+\textbf{Arduino Wire} 
+    & \texttt{Wire.endTransmission()} 
+    & Return code \textbf{2} (\texttt{NACK on address}) 
+    & Text fails to appear. The driver receives a NACK after sending the invalid address \texttt{0x28} and refuses to stream subsequent character bytes. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% =========================================================================
+\section{Timing \& Wire Throughput Analysis (Task Question 4)}
+% =========================================================================
+
+\begin{questionbox}{4}
+\textbf{The STM32 driver sends four bytes per LCD character in one transaction. How many bits are on the wire per character at $100\text{ kHz}$ and how long does it take? How many characters per second can the display be refreshed at most?}
+\end{questionbox}
+
+\subsubsection*{1. Bit Count on the Physical Wire per Character}
+In our driver, one LCD character is transmitted as a single atomic transaction consisting of:
+\begin{itemize}
+    \item 1 START condition ($S$)
+    \item 1 Slave Address Byte (\texttt{0x4E}): 8 data bits + 1 ACK bit = \textbf{9 clock cycles}
+    \item 4 Payload Bytes (Upper nibble with $E=1$, Upper nibble with $E=0$, Lower nibble with $E=1$, Lower nibble with $E=0$):
+    \begin{equation}
+    4\text{ data bytes} \times (8\text{ data bits} + 1\text{ ACK bit}) = 4 \times 9 = \mathbf{36\text{ clock cycles}}
+    \end{equation}
+    \item 1 STOP condition ($P$)
+\end{itemize}
+Total clock periods on the wire per character:
+\begin{equation}
+N_{\text{clocks}} = 9\text{ (address)} + 36\text{ (data)} = \mathbf{45\text{ SCL clock periods}}
+\end{equation}
+
+\subsubsection*{2. Transmission Duration at $100\text{ kHz}$ ($T_{\text{SCL}} = 10.0\,\mu\text{s}$)}
+\begin{equation}
+t_{\text{char}} = 45\text{ clocks} \times 10.0\,\mu\text{s/clock} = \mathbf{450\,\mu\text{s}} \quad (0.45\text{ ms})
+\end{equation}
+*(If calculating pure data payload without address re-transmission in a streaming transaction: $36 \times 10\,\mu\text{s} = 360\,\mu\text{s}$)*.
+
+\subsubsection*{3. Maximum Characters Refreshed Per Second}
+The theoretical maximum continuous character transfer rate across the bus:
+\begin{equation}
+\text{Throughput} = \frac{1}{t_{\text{char}}} = \frac{1}{450\times 10^{-6}\text{ s}} \approx \mathbf{2222.2\text{ characters/second}}
+\end{equation}
+\textbf{Full Screen Refresh Rate:}  
+A $16\times 2$ LCD has 32 visible character cells. Refreshing all 32 cells requires:
+\begin{equation}
+t_{\text{screen}} = 32 \times 450\,\mu\text{s} = 14.4\text{ ms} \implies \text{Max Frame Rate} = \frac{1}{0.0144\text{ s}} \approx \mathbf{69.4\text{ frames/second}}
+\end{equation}
+This demonstrates that even at standard $100\text{ kHz}$ speeds, the $\text{I}^2\text{C}$ bus can refresh the entire display at $\approx 70\text{ Hz}$, far surpassing human visual persistence.
+
+\end{document}

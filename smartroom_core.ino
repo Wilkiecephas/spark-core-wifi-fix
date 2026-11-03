@@ -39,8 +39,8 @@ SYSTEM_MODE(MANUAL);
 // ----------------------------------------------------------------------------
 // PIN ASSIGNMENTS (#define saves flash compared to const int)
 // ----------------------------------------------------------------------------
-uint8_t pinTrig           = D0;
-uint8_t pinEcho           = D1;
+#define PIN_TRIG            D0
+#define PIN_ECHO            D1
 #define PIN_SW1             D2
 #define PIN_PIR_D3          D3
 #define PIN_DHT11           D4
@@ -104,36 +104,21 @@ void setupTiLink() {
     pinMode(PIN_TI_RING, INPUT_PULLUP);
 }
 
-static inline void setTipLow()    { pinMode(PIN_TI_TIP, OUTPUT); digitalWrite(PIN_TI_TIP, LOW); }
-static inline void releaseTip()   { pinMode(PIN_TI_TIP, INPUT_PULLUP); }
-static inline bool readTip()      { return digitalRead(PIN_TI_TIP); }
-
-static inline void setRingLow()   { pinMode(PIN_TI_RING, OUTPUT); digitalWrite(PIN_TI_RING, LOW); }
-static inline void releaseRing()  { pinMode(PIN_TI_RING, INPUT_PULLUP); }
-static inline bool readRing()     { return digitalRead(PIN_TI_RING); }
-
 bool sendTiByte(uint8_t b) {
     for (int i = 0; i < 8; i++) {
         int bit = (b >> i) & 1;
+        int drivePin = (bit == 0) ? PIN_TI_TIP : PIN_TI_RING;
+        int waitPin  = (bit == 0) ? PIN_TI_RING : PIN_TI_TIP;
         unsigned long startUs = micros();
-        if (bit == 0) {
-            setTipLow();
-            while (readRing() == HIGH) {
-                if (micros() - startUs > 25000) { releaseTip(); return false; }
-            }
-            releaseTip();
-            while (readRing() == LOW) {
-                if (micros() - startUs > 50000) return false;
-            }
-        } else {
-            setRingLow();
-            while (readTip() == HIGH) {
-                if (micros() - startUs > 25000) { releaseRing(); return false; }
-            }
-            releaseRing();
-            while (readTip() == LOW) {
-                if (micros() - startUs > 50000) return false;
-            }
+
+        pinMode(drivePin, OUTPUT);
+        digitalWrite(drivePin, LOW);
+        while (digitalRead(waitPin) == HIGH) {
+            if (micros() - startUs > 25000) { pinMode(drivePin, INPUT_PULLUP); return false; }
+        }
+        pinMode(drivePin, INPUT_PULLUP);
+        while (digitalRead(waitPin) == LOW) {
+            if (micros() - startUs > 50000) return false;
         }
     }
     return true;
@@ -176,30 +161,27 @@ void buzzerOff() {
     digitalWrite(PIN_BUZZER, LOW);
 }
 
-void playNotes(const uint16_t notes[], uint8_t count) {
-    if (buzzerMuted) return;
-    for (uint8_t i = 0; i < count; i += 2) {
-        playTone(notes[i], notes[i+1]);
-        delay(15);
-    }
+void play2Tones(int d1, int f1, int d2, int f2) {
+    playTone(d1, f1);
+    delay(15);
+    playTone(d2, f2);
     buzzerOff();
 }
 
 void playWelcomeChime() {
-    static const uint16_t m[] = {50, 523, 50, 659, 60, 784, 110, 1047};
-    playNotes(m, 8);
+    play2Tones(50, 523, 50, 659);
+    play2Tones(60, 784, 110, 1047);
 }
 void playMelodyMotion() {
-    static const uint16_t m[] = {45, 659, 85, 988};
-    playNotes(m, 4);
+    play2Tones(45, 659, 85, 988);
 }
 void playIntrusionAlarm() {
-    static const uint16_t m[] = {60, 880, 60, 698, 80, 880};
-    playNotes(m, 6);
+    play2Tones(60, 880, 60, 698);
+    playTone(80, 880);
+    buzzerOff();
 }
 void playMelodySafe() {
-    static const uint16_t m[] = {35, 784, 65, 1047};
-    playNotes(m, 4);
+    play2Tones(35, 784, 65, 1047);
 }
 
 // ----------------------------------------------------------------------------
@@ -218,11 +200,11 @@ void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
     if (forceRgbColor == 3) { setBoardLeds(0, 0, 1, 1); return; }
 
     if (isAlarm || forceAlarmOn) {
-        setBoardLeds(1, 0, 0, (now % 200 < 100));
+        setBoardLeds(1, 0, 0, (now & 255) < 128);
     } else if (isMotion) {
-        setBoardLeds(0, 0, 1, (now % 400 < 200));
+        setBoardLeds(0, 0, 1, (now & 511) < 256);
     } else {
-        setBoardLeds(0, 1, 0, (forceLightOn || (now % 1000 < 80)));
+        setBoardLeds(0, 1, 0, (forceLightOn || ((now & 1023) < 80)));
     }
 }
 
@@ -230,31 +212,9 @@ void updateLeds(bool isAlarm, bool isMotion, unsigned long now) {
 // AUTO-CALIBRATING ULTRASONIC DRIVER (D0/D1)
 // ----------------------------------------------------------------------------
 void configureUltrasonicPins() {
-    pinMode(pinTrig, OUTPUT);
-    digitalWrite(pinTrig, LOW);
-    pinMode(pinEcho, INPUT);
-}
-
-void swapUltrasonicPins() {
-    int temp = pinTrig;
-    pinTrig = pinEcho;
-    pinEcho = temp;
-    configureUltrasonicPins();
-}
-
-uint32_t pulseInWithTimeout(int pin, int value, unsigned long timeoutUs) {
-    unsigned long startWait = micros();
-    while (digitalRead(pin) == value) {
-        if (micros() - startWait > timeoutUs) return 0;
-    }
-    while (digitalRead(pin) != value) {
-        if (micros() - startWait > timeoutUs) return 0;
-    }
-    unsigned long pulseStart = micros();
-    while (digitalRead(pin) == value) {
-        if (micros() - pulseStart > timeoutUs) return 0;
-    }
-    return micros() - pulseStart;
+    pinMode(PIN_TRIG, OUTPUT);
+    digitalWrite(PIN_TRIG, LOW);
+    pinMode(PIN_ECHO, INPUT);
 }
 
 int pingPair(int tPin, int ePin) {
@@ -264,14 +224,13 @@ int pingPair(int tPin, int ePin) {
     delayMicroseconds(12);
     digitalWrite(tPin, LOW);
 
-    // Timeout shortened to 16000us (275cm range max) to eliminate long busy-loop freezing
-    unsigned long duration = pulseInWithTimeout(ePin, HIGH, 16000);
+    unsigned long duration = pulseIn(ePin, HIGH);
     if (duration < 116 || duration > 16000) return 0;
     return (int)(duration / 58UL);
 }
 
 int readUltrasonicDistanceCm() {
-    int cm = pingPair(pinTrig, pinEcho);
+    int cm = pingPair(PIN_TRIG, PIN_ECHO);
     if (cm >= 2 && cm <= 400) {
         if (distHistory[0] <= 0 || distHistory[0] > 400) distHistory[0] = cm;
         distHistory[0] = (distHistory[0] * 3 + cm) >> 2;
@@ -322,27 +281,29 @@ bool readDHT11(int &outTemp, int &outHum) {
 }
 
 // ----------------------------------------------------------------------------
-// THINGSPEAK HTTP POST (Arduino-style WiFi, no Particle Cloud needed)
+// THINGSPEAK CLOUD TELEMETRY PUBLISHER
 // ----------------------------------------------------------------------------
-#define TS_WRITE_KEY  "2W20O13FTT3CIUD3"
-#define TS_HOST       "api.thingspeak.com"
-#define TS_PORT       80
+#define TS_HOST "api.thingspeak.com"
+#define TS_PORT 80
+#define TS_WRITE_KEY "2W20O13FTT3CIUD3"
 
 void publishToThingSpeak(int temp, int hum, int dist, int motion, int light, int pot) {
     if (!WiFi.ready()) return;
 
     TCPClient client;
     if (!client.connect(TS_HOST, TS_PORT)) {
-        // WiFi ready but host unreachable — skip silently
         return;
     }
 
-    char req[160];
-    snprintf(req, sizeof(req),
-        "GET /update?api_key=" TS_WRITE_KEY "&field1=%d&field2=%d&field3=%d&field4=%d&field5=%d&field6=%d HTTP/1.0\r\nHost: " TS_HOST "\r\n\r\n",
-        temp, hum, dist, motion, light, pot);
-
-    client.print(req);
+    client.print("GET /update?api_key=" TS_WRITE_KEY);
+    int vals[6] = {temp, hum, dist, motion, light, pot};
+    for (int i = 0; i < 6; i++) {
+        client.print("&field");
+        client.print(i + 1);
+        client.print('=');
+        client.print(vals[i]);
+    }
+    client.print(" HTTP/1.0\r\nHost: " TS_HOST "\r\n\r\n");
 
     // Drain response non-blockingly (fast drain, max 80ms)
     unsigned long t0 = millis();
@@ -353,14 +314,79 @@ void publishToThingSpeak(int temp, int hum, int dist, int motion, int light, int
 }
 
 // ----------------------------------------------------------------------------
+// LOCAL WI-FI HTTP REST SERVER (PORT 80) — DIRECT BROWSER WI-FI TELEMETRY
+// ----------------------------------------------------------------------------
+TCPServer localHttpServer = TCPServer(80);
+bool isHttpServerStarted = false;
+
+void handleLocalHttpClient() {
+    if (!WiFi.ready()) return;
+    if (!isHttpServerStarted) {
+        localHttpServer.begin();
+        isHttpServerStarted = true;
+    }
+
+    TCPClient client = localHttpServer.available();
+    if (!client || !client.connected()) return;
+
+    // Read request line non-blockingly
+    unsigned long startRead = millis();
+    while (client.connected() && (millis() - startRead < 40)) {
+        if (client.available()) {
+            char c = client.read();
+            if (c == '\n') break;
+        }
+    }
+
+    // Send HTTP JSON response with full CORS allow headers for direct browser fetch
+    client.print("HTTP/1.1 200 OK\r\n");
+    client.print("Content-Type: application/json\r\n");
+    client.print("Access-Control-Allow-Origin: *\r\n");
+    client.print("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+    client.print("Access-Control-Allow-Headers: *\r\n");
+    client.print("Connection: close\r\n\r\n");
+
+    client.print("{\"device_id\":\"spark_core_wifi\",\"temp\":");
+    client.print(currentTemp);
+    client.print(",\"hum\":");
+    client.print(currentHum);
+    client.print(",\"dist\":");
+    client.print(currentDist);
+    client.print(",\"motion\":");
+    client.print(currentMotion);
+    client.print(",\"light\":");
+    client.print(currentLight);
+    client.print(",\"pot\":");
+    client.print(currentPot);
+    client.print(",\"temp2\":");
+    client.print(valLm35Temp);
+    client.print(",\"wifi\":1}\r\n");
+
+    delay(2);
+    client.stop();
+}
+
+// ----------------------------------------------------------------------------
 // HIGH-SPEED SERIAL TELEMETRY & COMMAND PROCESSOR
 // ----------------------------------------------------------------------------
 void sendTelemetrySerial() {
-    char jbuf[160];
-    snprintf(jbuf, sizeof(jbuf),
-        "{\"device_id\":\"IoT_Shield_01\",\"temp\":%d,\"hum\":%d,\"dist\":%d,\"motion\":%d,\"light\":%d,\"pot\":%d,\"temp2\":%d}",
-        currentTemp, currentHum, currentDist, currentMotion, currentLight, currentPot, valLm35Temp);
-    Serial.println(jbuf);
+    Serial.print("{\"device_id\":\"IoT_Shield_01\",\"temp\":");
+    Serial.print(currentTemp);
+    Serial.print(",\"hum\":");
+    Serial.print(currentHum);
+    Serial.print(",\"dist\":");
+    Serial.print(currentDist);
+    Serial.print(",\"motion\":");
+    Serial.print(currentMotion);
+    Serial.print(",\"light\":");
+    Serial.print(currentLight);
+    Serial.print(",\"pot\":");
+    Serial.print(currentPot);
+    Serial.print(",\"temp2\":");
+    Serial.print(valLm35Temp);
+    Serial.print(",\"wifi\":");
+    Serial.print(WiFi.ready() ? 1 : 0);
+    Serial.println("}");
 }
 
 void processSerialCommand(const char* s) {
@@ -395,37 +421,11 @@ void processSerialCommand(const char* s) {
         if (col >= 'a' && col <= 'z') col -= 32;
         forceRgbColor = (col == 'R') ? 1 : (col == 'G') ? 2 : (col == 'B') ? 3 : 0;
         updateLeds(false, false, millis());
-    } else if (c == 'P') {
-        if (s[1] == 'I' || s[1] == 'i') {
-            Serial.print("PONG:");
-            const char* p = s + 4;
-            if (*p == ':') p++;
-            Serial.println(*p ? p : "SPARK_CORE");
-            return;
-        }
-        if (s[1] == '0' || s[1] == '1') {
-            Serial.println(pingPair((s[1] == '1') ? D1 : D0, (s[1] == '1') ? D0 : D1));
-            return;
-        }
+    } else if (c == 'P' && (s[1] == 'I' || s[1] == 'i')) {
+        Serial.println("PONG:OK");
+        return;
     } else if (c == '?' || (c == 'S' && (s[1] == 'T' || s[1] == 't'))) {
         sendTelemetrySerial();
-        return;
-    } else if (c == 'R' && s[1] >= '0' && s[1] <= '6') {
-        int pin = (s[1] == '1') ? D1 : (s[1] == '2') ? D2 : (s[1] == '3') ? D3 : (s[1] == '6') ? D6 : D0;
-        Serial.println(digitalRead(pin));
-        return;
-    } else if (c == 'A' && s[1] >= '0' && s[1] <= '4') {
-        int pin = (s[1] == '1') ? A1 : (s[1] == '2') ? A2 : (s[1] == '3') ? A3 : (s[1] == '4') ? A4 : A0;
-        Serial.println(analogRead(pin));
-        return;
-    } else if (c == 'U') {
-        swapUltrasonicPins();
-        Serial.println((pinTrig == D0) ? 30 : 31);
-        return;
-    } else if (c == 'C') {
-        int d = readUltrasonicDistanceCm();
-        playTone(30, 2400);
-        Serial.println(d);
         return;
     }
 
@@ -500,15 +500,25 @@ void setup() {
 
     // 8. Connect directly to WiFi (no Particle Cloud — SYSTEM_MODE MANUAL)
     RGB.color(255, 140, 0);  // Orange = connecting to WiFi
+    WiFi.on();
     WiFi.connect();
     unsigned long wifiStart = millis();
     while (!WiFi.ready() && millis() - wifiStart < 15000) {
+        Particle.process();
         delay(200);
     }
     if (WiFi.ready()) {
         RGB.color(0, 200, 100);  // Green = WiFi ready, ThingSpeak live
+        localHttpServer.begin();
+        isHttpServerStarted = true;
+        Serial.print("\n[WIFI] Connected! IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("[WIFI] Telemetry Server: http://");
+        Serial.print(WiFi.localIP());
+        Serial.println("/telemetry");
     } else {
         RGB.color(200, 0, 0);    // Red = WiFi failed, USB serial still active
+        Serial.println("\n[WIFI] Connection failed or timed out. USB Serial still active.");
     }
 }
 
@@ -516,7 +526,20 @@ void setup() {
 // MAIN LOOP
 // ----------------------------------------------------------------------------
 void loop() {
+    Particle.process();
     unsigned long now = millis();
+
+    // Direct Wi-Fi HTTP Telemetry Responder
+    handleLocalHttpClient();
+
+    // Background WiFi auto-reconnect if connection drops
+    if (!WiFi.ready()) {
+        static unsigned long lastWifiRetry = 0;
+        if (now - lastWifiRetry >= 10000) {
+            lastWifiRetry = now;
+            WiFi.connect();
+        }
+    }
 
     // 0. Incoming USB Serial Command Receiver & Processor (Ultra-fast UI responses)
     static char serialCmdBuf[64];

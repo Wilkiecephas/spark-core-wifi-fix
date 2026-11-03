@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "author": "Kyambogo University Dept of EEE - TETE 3102",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-arduino-uno",
+      "id": "uno",
+      "top": 120,
+      "left": 100,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -120,
+      "left": 100,
+      "attrs": {
+        "pins": "i2c"
+      }
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc",
+      "top": -100,
+      "left": 450,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot",
+      "top": 320,
+      "left": 50,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 60,
+      "left": 480,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 100,
+      "left": 480,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-logic-analyzer",
+      "id": "logic",
+      "top": 200,
+      "left": 460,
+      "attrs": {
+        "bufferSize": "64000"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "uno:GND.1",
+      "lcd:GND",
+      "black",
+      [
+        "v-20",
+        "h-40"
+      ]
+    ],
+    [
+      "uno:5V",
+      "lcd:VCC",
+      "red",
+      [
+        "v-30",
+        "h-20"
+      ]
+    ],
+    [
+      "uno:A4",
+      "lcd:SDA",
+      "blue",
+      [
+        "v-50",
+        "h40"
+      ]
+    ],
+    [
+      "uno:A5",
+      "lcd:SCL",
+      "yellow",
+      [
+        "v-60",
+        "h30"
+      ]
+    ],
+    [
+      "uno:GND.1",
+      "rtc:GND",
+      "black",
+      [
+        "v-20",
+        "h200"
+      ]
+    ],
+    [
+      "uno:5V",
+      "rtc:5V",
+      "red",
+      [
+        "v-30",
+        "h220"
+      ]
+    ],
+    [
+      "uno:A4",
+      "rtc:SDA",
+      "blue",
+      [
+        "v-50",
+        "h260"
+      ]
+    ],
+    [
+      "uno:A5",
+      "rtc:SCL",
+      "yellow",
+      [
+        "v-60",
+        "h280"
+      ]
+    ],
+    [
+      "uno:GND.2",
+      "pot:GND",
+      "black",
+      [
+        "v20",
+        "h-20"
+      ]
+    ],
+    [
+      "uno:5V",
+      "pot:VCC",
+      "red",
+      [
+        "v30",
+        "h-40"
+      ]
+    ],
+    [
+      "uno:A0",
+      "pot:SIG",
+      "green",
+      [
+        "v40",
+        "h-30"
+      ]
+    ],
+    [
+      "uno:13",
+      "r1:1",
+      "green",
+      [
+        "v-10",
+        "h60"
+      ]
+    ],
+    [
+      "r1:2",
+      "led1:A",
+      "green",
+      [
+        "v-10"
+      ]
+    ],
+    [
+      "led1:C",
+      "uno:GND.3",
+      "black",
+      [
+        "v20",
+        "h-80"
+      ]
+    ],
+    [
+      "uno:A4",
+      "logic:D0",
+      "blue",
+      [
+        "v-40",
+        "h320"
+      ]
+    ],
+    [
+      "uno:A5",
+      "logic:D1",
+      "yellow",
+      [
+        "v-50",
+        "h340"
+      ]
+    ],
+    [
+      "uno:GND.3",
+      "logic:GND",
+      "black",
+      [
+        "v10",
+        "h40"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

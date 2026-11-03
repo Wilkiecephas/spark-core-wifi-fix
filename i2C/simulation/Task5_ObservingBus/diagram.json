@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "author": "Group 4 - KyU",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-arduino-uno",
+      "id": "uno",
+      "top": 0,
+      "left": 0
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -180,
+      "left": 0,
+      "attrs": {
+        "pins": "i2c"
+      }
+    },
+    {
+      "type": "wokwi-logic-analyzer",
+      "id": "logic",
+      "top": 200,
+      "left": 250,
+      "attrs": {
+        "bufferSize": "64000"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "uno:GND.1",
+      "lcd:GND",
+      "black",
+      [
+        "v-20",
+        "h-40"
+      ]
+    ],
+    [
+      "uno:5V",
+      "lcd:VCC",
+      "red",
+      [
+        "v-30",
+        "h-20"
+      ]
+    ],
+    [
+      "uno:A4",
+      "lcd:SDA",
+      "blue",
+      [
+        "v-50",
+        "h40"
+      ]
+    ],
+    [
+      "uno:A5",
+      "lcd:SCL",
+      "yellow",
+      [
+        "v-60",
+        "h30"
+      ]
+    ],
+    [
+      "uno:A4",
+      "logic:D0",
+      "blue",
+      [
+        "v20",
+        "h200"
+      ]
+    ],
+    [
+      "uno:A5",
+      "logic:D1",
+      "yellow",
+      [
+        "v30",
+        "h220"
+      ]
+    ],
+    [
+      "uno:GND.2",
+      "logic:GND",
+      "black",
+      [
+        "v40",
+        "h240"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

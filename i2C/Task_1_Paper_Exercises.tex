@@ -1,0 +1,382 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 1}{Theoretical Exercises, Addressing Math \& Protocol Mechanics}
+
+\begin{objectivebox}
+The objective of this task is to master the foundational mechanics of the Inter-Integrated Circuit ($\text{I}^2\text{C}$) protocol, including 7-bit to 8-bit wire addressing transformations, physical bus timing constraints, pull-up resistor sizing under capacitive loading, open-drain bus arbitration, and microcontroller driver architectures (Polling vs. Interrupt vs. DMA).
+\end{objectivebox}
+
+% =========================================================================
+\section*{Exercise 1: Addressing Conversions (7-bit vs. 8-bit Wire Frames)}
+% =========================================================================
+\begin{theorybox}
+In the $\text{I}^2\text{C}$ specification (NXP UM10204), a standard slave address is 7 bits long ($A_6 \dots A_0$). When transferred across the physical serial bus, the address occupies the 7 most significant bits of the first byte transmitted after a START condition. Bit 0 ($R/\overline{W}$) defines the direction:
+\begin{equation}
+\text{Address Byte (Wire)} = (\text{7-bit Address} \ll 1) \;|\; (R/\overline{W})
+\end{equation}
+where $R/\overline{W} = 0$ designates a \textbf{Master Write} operation and $R/\overline{W} = 1$ designates a \textbf{Master Read} operation.
+\end{theorybox}
+
+\subsubsection*{Step-by-Step Conversions}
+
+\begin{enumerate}
+    \item[\textbf{(a)}] \textbf{Given 7-bit Address:} $\mathbf{0x50}$
+    \begin{itemize}
+        \item Binary representation (7-bit): $0x50 = 1010000_2$
+        \item Bit-shift left by 1 bit: $1010000_2 \ll 1 = 10100000_2$
+        \item \textbf{Write Address Byte} ($R/\overline{W} = 0$): $10100000_2 = \mathbf{0xA0}$
+        \item \textbf{Read Address Byte} ($R/\overline{W} = 1$): $10100001_2 = \mathbf{0xA1}$
+        \item \textit{Common Device Context:} Standard 24C32/24C64 I2C EEPROM.
+    \end{itemize}
+
+    \item[\textbf{(b)}] \textbf{Given 7-bit Address:} $\mathbf{0x3F}$
+    \begin{itemize}
+        \item Binary representation (7-bit): $0x3F = 0111111_2$
+        \item Bit-shift left by 1 bit: $0111111_2 \ll 1 = 01111110_2$
+        \item \textbf{Write Address Byte} ($R/\overline{W} = 0$): $01111110_2 = \mathbf{0x7E}$
+        \item \textbf{Read Address Byte} ($R/\overline{W} = 1$): $01111111_2 = \mathbf{0x7F}$
+        \item \textit{Common Device Context:} PCF8574A I2C LCD backpack (default address with jumpers open).
+    \end{itemize}
+
+    \item[\textbf{(c)}] \textbf{Given Address Byte:} $\mathbf{0xD1}$
+    \begin{itemize}
+        \item Binary on wire: $0xD1 = 11010001_2$
+        \item Bit 0 is $1 \implies \mathbf{Read\;Byte}$.
+        \item Extract 7-bit address by shifting right by 1: $11010001_2 \gg 1 = 01101000_2 = \mathbf{0x68}$.
+        \item Corresponding \textbf{Write Address Byte} ($R/\overline{W} = 0$): $11010000_2 = \mathbf{0xD0}$.
+        \item \textit{Common Device Context:} DS3231 High-Precision Real-Time Clock (RTC).
+    \end{itemize}
+
+    \item[\textbf{(d)}] \textbf{Given Address Byte:} $\mathbf{0x78}$ (Designated Write)
+    \begin{itemize}
+        \item Binary on wire: $0x78 = 01111000_2$
+        \item Bit 0 is $0 \implies \mathbf{Write\;Byte}$.
+        \item Extract 7-bit address: $01111000_2 \gg 1 = 00111100_2 = \mathbf{0x3C}$.
+        \item Corresponding \textbf{Read Address Byte} ($R/\overline{W} = 1$): $01111001_2 = \mathbf{0x79}$.
+        \item \textit{Common Device Context:} SSD1306 0.96-inch 128$\times$64 OLED display.
+    \end{itemize}
+
+    \item[\textbf{(e)}] \textbf{Given 7-bit Binary Address:} $\mathbf{0110000_2}$
+    \begin{itemize}
+        \item Hexadecimal 7-bit equivalent: $0110000_2 = \mathbf{0x30}$
+        \item Bit-shift left by 1 bit: $0110000_2 \ll 1 = 01100000_2$
+        \item \textbf{Write Address Byte} ($R/\overline{W} = 0$): $01100000_2 = \mathbf{0x60}$
+        \item \textbf{Read Address Byte} ($R/\overline{W} = 1$): $01100001_2 = \mathbf{0x61}$
+    \end{itemize}
+\end{enumerate}
+
+\begin{table}[h]
+\centering
+\small
+\caption{Consolidated Summary of Address Conversions}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c c c X}
+\toprule
+\textbf{Item} & \textbf{7-bit Hex} & \textbf{7-bit Binary} & \textbf{Write Byte (Hex)} & \textbf{Read Byte (Hex)} & \textbf{Typical Device Identity} \\
+\midrule
+(a) & \texttt{0x50} & $1010000_2$ & \texttt{0xA0} & \texttt{0xA1} & 24C32 / AT24C EEPROM \\
+(b) & \texttt{0x3F} & $0111111_2$ & \texttt{0x7E} & \texttt{0x7F} & PCF8574A LCD Backpack \\
+(c) & \texttt{0x68} & $1101000_2$ & \texttt{0xD0} & \texttt{0xD1} & DS3231 RTC Module \\
+(d) & \texttt{0x3C} & $0011100_2$ & \texttt{0x78} & \texttt{0x79} & SSD1306 Graphic OLED \\
+(e) & \texttt{0x30} & $0110000_2$ & \texttt{0x60} & \texttt{0x61} & Lecture Slide Example \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\newpage
+% =========================================================================
+\section*{Exercise 2: Complete Bus Frame Timing Diagram}
+% =========================================================================
+\textbf{Scenario:} Master writes the byte \texttt{0x55} ($01010101_2$) to a slave device at 7-bit address \texttt{0x48} ($1001000_2$).
+
+\subsubsection*{Mathematical \& Protocol Construction}
+\begin{itemize}
+    \item \textbf{7-bit Slave Address:} \texttt{0x48} ($A_6=1, A_5=0, A_4=0, A_3=1, A_2=0, A_1=0, A_0=0$).
+    \item \textbf{Direction Bit ($R/\overline{W}$):} $0$ (Write).
+    \item \textbf{Wire Address Byte:} $(0x48 \ll 1) \;|\; 0 = 10010000_2 = \mathbf{0x90}$.
+    \item \textbf{Data Byte:} $0x55 = 01010101_2$.
+    \item \textbf{Acknowledge Responses:} Driven \textbf{LOW} by the slave during the 9th clock of the address phase and 9th clock of the data phase.
+\end{itemize}
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[x=0.75cm,y=0.8cm,>=Stealth]
+    % Grid guides (comment out in final)
+    \draw[help lines, color=gray!10] (0,0) grid (21,5);
+    
+    % SCL line
+    \node[left,font=\small\bfseries] at (0,3.5) {SCL};
+    \draw[thick,color=KyuNavy] 
+        (0,4) -- (0.8,4) 
+        \foreach \i in {1,...,19} {
+            -- (\i-0.2,4) -- (\i-0.2,3) -- (\i+0.3,3) -- (\i+0.3,4) -- (\i+0.8,4)
+        }
+        -- (20.5,4);
+
+    % Clock Labels
+    \foreach \c in {1,...,9} {
+        \node[above,font=\tiny\bfseries\color{DarkSlate}] at (\c+0.05,4.1) {\c};
+    }
+    \foreach \c in {1,...,9} {
+        \pgfmathtruncatemacro{\clknum}{\c+9}
+        \node[above,font=\tiny\bfseries\color{DarkSlate}] at (\c+9.5+0.05,4.1) {\clknum};
+    }
+
+    % SDA line
+    \node[left,font=\small\bfseries] at (0,1.5) {SDA};
+    
+    % Waveform coordinates
+    % START: SCL High, SDA drops
+    \draw[very thick,color=KyuGold!90!black] 
+        (0,2) -- (0.4,2) -- (0.6,1) -- (0.8,1) % START
+        -- (1-0.2,1) -- (1-0.2,2) -- (1.8,2) % Bit 7 = 1
+        -- (2-0.2,2) -- (2-0.2,1) -- (2.8,1) % Bit 6 = 0
+        -- (3-0.2,1) -- (3-0.2,1) -- (3.8,1) % Bit 5 = 0
+        -- (4-0.2,1) -- (4-0.2,2) -- (4.8,2) % Bit 4 = 1
+        -- (5-0.2,2) -- (5-0.2,1) -- (5.8,1) % Bit 3 = 0
+        -- (6-0.2,1) -- (6-0.2,1) -- (6.8,1) % Bit 2 = 0
+        -- (7-0.2,1) -- (7-0.2,1) -- (7.8,1) % Bit 1 = 0
+        -- (8-0.2,1) -- (8-0.2,1) -- (8.8,1) % Bit 0 (R/W) = 0
+        -- (9-0.2,1) -- (9-0.2,1) -- (9.8,1) % ACK (Slave pulls low) = 0
+        % Data Byte: 0x55 = 01010101
+        -- (10.5-0.2,1) -- (10.5-0.2,1) -- (11.3,1) % D7 = 0
+        -- (11.5-0.2,1) -- (11.5-0.2,2) -- (12.3,2) % D6 = 1
+        -- (12.5-0.2,2) -- (12.5-0.2,1) -- (13.3,1) % D5 = 0
+        -- (13.5-0.2,1) -- (13.5-0.2,2) -- (14.3,2) % D4 = 1
+        -- (14.5-0.2,2) -- (14.5-0.2,1) -- (15.3,1) % D3 = 0
+        -- (15.5-0.2,1) -- (15.5-0.2,2) -- (16.3,2) % D2 = 1
+        -- (16.5-0.2,2) -- (16.5-0.2,1) -- (17.3,1) % D1 = 0
+        -- (17.5-0.2,1) -- (17.5-0.2,2) -- (18.3,2) % D0 = 1
+        -- (18.5-0.2,2) -- (18.5-0.2,1) -- (19.3,1) % ACK (Slave pulls low) = 0
+        -- (19.8,1) -- (20.2,2) -- (20.5,2);         % STOP condition (SDA rises while SCL high)
+
+    % Annotated markers
+    \node[below,font=\scriptsize\bfseries\color{AlertRed}] at (0.5,0.8) {START (S)};
+    \node[below,font=\tiny\bfseries] at (1.05,0.8) {A6=1};
+    \node[below,font=\tiny\bfseries] at (2.05,0.8) {A5=0};
+    \node[below,font=\tiny\bfseries] at (3.05,0.8) {A4=0};
+    \node[below,font=\tiny\bfseries] at (4.05,0.8) {A3=1};
+    \node[below,font=\tiny\bfseries] at (5.05,0.8) {A2=0};
+    \node[below,font=\tiny\bfseries] at (6.05,0.8) {A1=0};
+    \node[below,font=\tiny\bfseries] at (7.05,0.8) {A0=0};
+    \node[below,font=\tiny\bfseries\color{KyuNavy}] at (8.05,0.8) {R/W=0};
+    \node[below,font=\scriptsize\bfseries\color{SuccessGreen}] at (9.05,0.8) {ACK};
+
+    \node[below,font=\tiny\bfseries] at (10.55,0.8) {D7=0};
+    \node[below,font=\tiny\bfseries] at (11.55,0.8) {D6=1};
+    \node[below,font=\tiny\bfseries] at (12.55,0.8) {D5=0};
+    \node[below,font=\tiny\bfseries] at (13.55,0.8) {D4=1};
+    \node[below,font=\tiny\bfseries] at (14.55,0.8) {D3=0};
+    \node[below,font=\tiny\bfseries] at (15.55,0.8) {D2=1};
+    \node[below,font=\tiny\bfseries] at (16.55,0.8) {D1=0};
+    \node[below,font=\tiny\bfseries] at (17.55,0.8) {D0=1};
+    \node[below,font=\scriptsize\bfseries\color{SuccessGreen}] at (18.55,0.8) {ACK};
+    \node[below,font=\scriptsize\bfseries\color{AlertRed}] at (20.2,0.8) {STOP (P)};
+
+    % Section grouping brackets
+    \draw[thick,decoration={brace,mirror,raise=18pt},decorate] (0.8,0.7) -- (8.8,0.7) 
+        node[pos=0.5,below=22pt,font=\footnotesize\bfseries] {Address Byte: \texttt{0x90} ($10010000_2$)};
+
+    \draw[thick,decoration={brace,mirror,raise=18pt},decorate] (10.3,0.7) -- (18.3,0.7) 
+        node[pos=0.5,below=22pt,font=\footnotesize\bfseries] {Data Byte: \texttt{0x55} ($01010101_2$)};
+\end{tikzpicture}
+\caption{Complete physical bus transaction waveform for writing \texttt{0x55} to address \texttt{0x48}.}
+\end{figure}
+
+% =========================================================================
+\section*{Exercise 3: Pull-Up Resistor Calculation ($R_{p(\min)}$ and $R_{p(\max)}$)}
+% =========================================================================
+\subsubsection*{Operating Parameters Given}
+\begin{itemize}
+    \item Bus Supply Voltage: $V_{DD} = 5.0\text{ V}$
+    \item Total Parasitic Bus Capacitance: $C_b = 150\text{ pF}$
+    \item Standard-mode ($100\text{ kHz}$): maximum permissible rise time $t_{r(\max)} = 1000\text{ ns}$
+    \item Fast-mode ($400\text{ kHz}$): maximum permissible rise time $t_{r(\max)} = 300\text{ ns}$
+    \item Device sink current: $I_{OL} = 3\text{ mA}$ at $V_{OL(\max)} = 0.4\text{ V}$
+\end{itemize}
+
+\subsubsection*{Mathematical Derivation of Limits}
+\paragraph{1. Minimum Pull-Up Resistor ($R_{p(\min)}$):}
+Determined by the maximum sink capability of open-drain output FETs to guarantee $V_{OL} \le 0.4\text{ V}$:
+\begin{equation}
+R_{p(\min)} = \frac{V_{DD} - V_{OL(\max)}}{I_{OL}} = \frac{5.0\text{ V} - 0.4\text{ V}}{3.0\times 10^{-3}\text{ A}} = \frac{4.6\text{ V}}{0.003\text{ A}} = \mathbf{1533.33\,\Omega} \approx \mathbf{1.53\text{ k}\Omega}
+\end{equation}
+
+\paragraph{2. Maximum Pull-Up Resistor ($R_{p(\max)}$):}
+Governed by the $RC$ exponential charging curve where rise time $t_r$ is measured between $30\%$ and $70\%$ of $V_{DD}$:
+\begin{equation}
+V(t) = V_{DD}\left(1 - e^{-t/RC}\right) \implies t_r = \ln\left(\frac{1 - 0.3}{1 - 0.7}\right) R_p C_b = \ln\left(\frac{0.7}{0.3}\right) R_p C_b \approx 0.8473 \cdot R_p C_b
+\end{equation}
+\begin{equation}
+R_{p(\max)} = \frac{t_{r(\max)}}{0.8473 \cdot C_b}
+\end{equation}
+
+\begin{itemize}
+    \item \textbf{Case (a): Standard-mode ($100\text{ kHz}$, $t_r \le 1000\text{ ns}$):}
+    \begin{equation}
+    R_{p(\max, 100k)} = \frac{1000\times 10^{-9}\text{ s}}{0.8473 \times 150\times 10^{-12}\text{ F}} = \frac{1000}{0.127095}\;\Omega = \mathbf{7868.1\,\Omega} \approx \mathbf{7.87\text{ k}\Omega}
+    \end{equation}
+    \textbf{Allowable Range:} $1.53\text{ k}\Omega \le R_p \le 7.87\text{ k}\Omega$. \\
+    \textbf{Chosen Standard E24 Resistor:} $\mathbf{4.7\text{ k}\Omega}$ (typical laboratory default).
+
+    \item \textbf{Case (b): Fast-mode ($400\text{ kHz}$, $t_r \le 300\text{ ns}$):}
+    \begin{equation}
+    R_{p(\max, 400k)} = \frac{300\times 10^{-9}\text{ s}}{0.8473 \times 150\times 10^{-12}\text{ F}} = \frac{300}{0.127095}\;\Omega = \mathbf{2360.4\,\Omega} \approx \mathbf{2.36\text{ k}\Omega}
+    \end{equation}
+    \textbf{Allowable Range:} $1.53\text{ k}\Omega \le R_p \le 2.36\text{ k}\Omega$. \\
+    \textbf{Chosen Standard E24 Resistor:} $\mathbf{2.2\text{ k}\Omega}$ (or $1.8\text{ k}\Omega$).
+\end{itemize}
+
+\begin{troublebox}
+Notice that a $4.7\text{ k}\Omega$ pull-up resistor violates the Fast-mode specification when $C_b = 150\text{ pF}$, yielding $t_r = 0.8473 \times 4700 \times 150\text{ pF} = 597\text{ ns}$, which is double the permissible $300\text{ ns}$ limit. This causes high-speed edge rounding and communication failures.
+\end{troublebox}
+
+\newpage
+% =========================================================================
+\section*{Exercise 4: Sensor Register-Read Transaction Duration}
+% =========================================================================
+\textbf{Transaction Sequence:}
+\begin{equation*}
+\text{START} \to \underbrace{\text{addr+W}}_{9\text{ clocks}} \to \underbrace{\text{register}}_{9\text{ clocks}} \to \text{Sr} \to \underbrace{\text{addr+R}}_{9\text{ clocks}} \to \underbrace{\text{Data 1}}_{9\text{ clocks}} \to \dots \to \underbrace{\text{Data 6}}_{9\text{ clocks}} \to \text{STOP}
+\end{equation*}
+
+\subsubsection*{Clock Cycle Accounting}
+Every transmitted or received byte consists of 8 data bits followed by 1 ACK/NACK bit (9 SCL clock pulses per byte).
+\begin{itemize}
+    \item Total bytes moved = 1 (addr+W) + 1 (register) + 1 (addr+R) + 6 (data bytes) = \textbf{9 bytes total}.
+    \item Total clock periods ($N_{\text{clocks}}$) $= 9\text{ bytes} \times 9\text{ clocks/byte} = \mathbf{81\text{ SCL clock cycles}}$.
+\end{itemize}
+
+\subsubsection*{Time Calculations (Ignoring framing overhead)}
+\begin{enumerate}
+    \item[\textbf{(a)}] \textbf{At $100\text{ kHz}$ Standard-mode ($T_{\text{SCL}} = 10.0\,\mu\text{s}$):}
+    \begin{equation}
+    t_{\text{transfer, 100k}} = 81 \times 10.0\,\mu\text{s} = \mathbf{810.0\,\mu\text{s}} \quad (0.81\text{ ms})
+    \end{equation}
+    \item[\textbf{(b)}] \textbf{At $400\text{ kHz}$ Fast-mode ($T_{\text{SCL}} = 2.5\,\mu\text{s}$):}
+    \begin{equation}
+    t_{\text{transfer, 400k}} = 81 \times 2.5\,\mu\text{s} = \mathbf{202.5\,\mu\text{s}} \quad (\approx 0.20\text{ ms})
+    \end{equation}
+\end{enumerate}
+\textit{Speedup factor:} $810 / 202.5 = \mathbf{4.0\times}$ throughput increase.
+
+% =========================================================================
+\section*{Exercise 5: Rationale for Master NACK on Final Read Byte}
+% =========================================================================
+\begin{theorybox}
+During a Master-Receive transaction, the slave drives the SDA line to present successive data bits while the master drives the SCL clock. On the 9th clock pulse of each byte, the roles reverse: the master drives SDA to acknowledge the byte.
+\end{theorybox}
+
+\textbf{Why Master sends NACK before STOP:}
+\begin{enumerate}
+    \item If the master were to send an \textbf{ACK} (holding SDA LOW) on the final byte, the slave would prepare to transmit the subsequent byte, immediately asserting its next data bit onto the SDA line on the next falling edge of SCL.
+    \item If that subsequent bit happens to be a logic $0$, the slave pulls SDA LOW.
+    \item To generate a valid \textbf{STOP (P)} condition, the master must cause a low-to-high transition on SDA while SCL is held HIGH.
+    \item However, because the bus is a wired-AND configuration, if the slave is pulling SDA LOW, the master \textbf{cannot release SDA HIGH}. The master is locked out from generating a valid STOP condition, hanging the bus.
+    \item Transmitting a \textbf{NACK} (master releases SDA HIGH on the 9th clock) explicitly informs the slave that transmission has ended. The slave releases SDA into high-impedance mode, allowing the master to cleanly toggle SDA from LOW to HIGH during SCL HIGH to issue the STOP condition.
+\end{enumerate}
+
+% =========================================================================
+\section*{Exercise 6: Address Conflicts on a Shared Bus}
+% =========================================================================
+\textbf{The Problem:}
+$\text{I}^2\text{C}$ uses in-band addressing broadcast across shared SDA/SCL lines. If two slave devices share identical 7-bit addresses (e.g., two fixed-address sensors at \texttt{0x68}):
+\begin{itemize}
+    \item Both slaves detect their address and simultaneously pull SDA low to assert ACK.
+    \item During read transactions, both slaves simultaneously drive SDA according to their internal registers. If Slave 1 attempts to output a $1$ and Slave 2 outputs a $0$, the wired-AND configuration forces the line to $0$. The master receives corrupted data, and bus arbitration mechanisms fail.
+\end{itemize}
+
+\textbf{Two Engineering Solutions:}
+\begin{enumerate}
+    \item \textbf{Hardware Pin Strapping ($A_0, A_1, A_2$ Jumpers):} Most modern $\text{I}^2\text{C}$ chips (such as the PCF8574 expander or 24C EEPROMs) include physical address pins. Tying these pins to $V_{DD}$ or GND offsets the lowest address bits, assigning unique 7-bit addresses (e.g., \texttt{0x20} through \texttt{0x27}).
+    \item \textbf{I2C Multiplexer / Bus Switch IC (e.g., TCA9548A):} When devices have strictly fixed, unchangeable addresses, an active $\text{I}^2\text{C}$ multiplexer is placed between the master and slaves. The master commands the multiplexer over address \texttt{0x70} to dynamically connect only one sub-channel at a time.
+\end{enumerate}
+
+\newpage
+% =========================================================================
+\section*{Exercise 7: Open-Drain Physics vs. Push-Pull Hazards}
+% =========================================================================
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[x=1.2cm,y=1.2cm,>=Stealth]
+    % VDD rail
+    \draw[thick] (2,3.5) node[above] {$V_{DD}$ (+3.3V / +5V)} -- (2,3.1);
+    \draw[thick] (1.8,3.1) rectangle (2.2,2.5);
+    \node at (2,2.8) {\footnotesize $R_p$};
+    \draw[thick] (2,2.5) -- (2,2);
+    \draw[very thick,color=KyuNavy] (0,2) -- (4,2) node[right] {Bus Line (SDA or SCL)};
+
+    % Device 1 (Open-Drain NMOS)
+    \draw[thick] (0.8,2) -- (0.8,1.3);
+    \draw[thick] (0.5,1.3) rectangle (1.1,0.7);
+    \node at (0.8,1.0) {\footnotesize NMOS};
+    \draw[thick] (0.8,0.7) -- (0.8,0.3);
+    \draw[thick] (0.6,0.3) -- (1.0,0.3);
+    \draw[thick] (0.7,0.2) -- (0.9,0.2);
+    \draw[thick] (0.75,0.1) -- (0.85,0.1);
+    \draw[->,thick] (0.1,1.0) node[left] {\footnotesize Gate 1} -- (0.5,1.0);
+
+    % Device 2 (Open-Drain NMOS)
+    \draw[thick] (3.2,2) -- (3.2,1.3);
+    \draw[thick] (2.9,1.3) rectangle (3.5,0.7);
+    \node at (3.2,1.0) {\footnotesize NMOS};
+    \draw[thick] (3.2,0.7) -- (3.2,0.3);
+    \draw[thick] (3.0,0.3) -- (3.4,0.3);
+    \draw[thick] (3.1,0.2) -- (3.3,0.2);
+    \draw[thick] (3.15,0.1) -- (3.25,0.1);
+    \draw[->,thick] (2.5,1.0) node[left] {\footnotesize Gate 2} -- (2.9,1.0);
+\end{tikzpicture}
+\caption{Wired-AND Open-Drain architecture of the $\text{I}^2\text{C}$ bus.}
+\end{figure}
+
+\subsubsection*{Why Open-Drain is Mandatory}
+\begin{enumerate}
+    \item \textbf{Wired-AND Logic:} A line is logic HIGH only when \textbf{all} connected open-drain transistors are turned OFF (allowing $R_p$ to pull the line up). If any single device turns its transistor ON, the line is pulled LOW.
+    \item \textbf{Non-Destructive Clock Stretching \& Multi-Master Arbitration:} A slave can safely hold SCL LOW while servicing an interrupt without causing damage. In multi-master systems, two masters transmitting different bits do not create bus contention.
+    \item \textbf{Safe Voltage Level Interoperability:} Devices operating at $3.3\text{ V}$ and $5\text{ V}$ can coexist on the same physical line if the pull-up resistor is tied to $3.3\text{ V}$ and the $5\text{ V}$ devices tolerate $3.3\text{ V}$ $V_{IH}$ logic thresholds.
+\end{enumerate}
+
+\subsubsection*{What Happens if Push-Pull Outputs are Used?}
+In a push-pull driver stage, active PMOS and NMOS transistors actively drive the pin to $V_{DD}$ and GND respectively.
+\begin{itemize}
+    \item If Device 1 drives the line HIGH ($V_{DD}$) while Device 2 drives the line LOW (GND), a direct low-impedance short circuit is formed from $V_{DD}$ through the PMOS of Device 1 and the NMOS of Device 2 to GND.
+    \item The resulting shoot-through fault current:
+    \begin{equation}
+    I_{\text{short}} = \frac{V_{DD}}{R_{\text{ON, PMOS}} + R_{\text{ON, NMOS}}} \approx \frac{5\text{ V}}{20\,\Omega + 20\,\Omega} = 125\text{ mA}
+    \end{equation}
+    This current far exceeds the maximum absolute rating of MCU I/O pins (typically $25\text{ mA}$ on STM32/ATmega), permanently destroying the output pads through thermal failure.
+\end{itemize}
+
+% =========================================================================
+\section*{Exercise 8: STM32 HAL Driver Styles: Polling, Interrupt \& DMA}
+% =========================================================================
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Comprehensive Comparison of STM32 HAL I2C Operational Modes}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{3.8cm} p{4.2cm} p{4.2cm}}
+\toprule
+\textbf{Metric} & \textbf{Polling (Blocking)} & \textbf{Interrupt (IT) Mode} & \textbf{Direct Memory Access (DMA)} \\
+\midrule
+\textbf{HAL API Calls} & \texttt{HAL\_I2C\_Master\_Transmit} \texttt{HAL\_I2C\_Mem\_Read} & \texttt{HAL\_I2C\_Master\_Transmit\_IT} \texttt{HAL\_I2C\_Mem\_Read\_IT} & \texttt{HAL\_I2C\_Master\_Transmit\_DMA} \texttt{HAL\_I2C\_Mem\_Read\_DMA} \\
+\midrule
+\textbf{CPU Utilization} & $\approx 100\%$ during transfer (CPU trapped in delay loop). & Very Low; CPU services short ISR per byte transfer. & Near $0\%$; hardware controller streams directly to RAM. \\
+\midrule
+\textbf{Return Timing} & Blocks until transfer is complete or timeout expires. & Returns execution to caller immediately. & Returns execution to caller immediately. \\
+\midrule
+\textbf{Completion Signal} & Return code (\texttt{HAL\_OK}, \texttt{HAL\_TIMEOUT}). & ISR Callback (\texttt{HAL\_I2C\_MemRxCpltCallback}). & DMA completion interrupt callback. \\
+\midrule
+\textbf{Buffer Safety} & Local stack variables are safe. & Must use global/static buffers (stack will corrupt). & Must use persistent memory (DMA writes asynchronously). \\
+\midrule
+\textbf{When to Choose} & \textbf{Short, infrequent transfers}: bus scanner, single configuration writes, sensor initialization. & \textbf{Low-volume background tasks}: reading RTC every 1 sec without freezing UI or motor loops. & \textbf{Large data payloads}: streaming 1024-byte framebuffers to SSD1306 OLED, high-speed ADC logging. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\end{document}

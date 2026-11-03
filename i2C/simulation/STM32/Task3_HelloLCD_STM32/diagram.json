@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "author": "Group 4 - KyU (TETE 3102)",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-stm32-bluepill",
+      "id": "stm32",
+      "top": 0,
+      "left": 0
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -200,
+      "left": 0,
+      "attrs": {
+        "pins": "i2c"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "stm32:GND.1",
+      "lcd:GND",
+      "black",
+      [
+        "v-30",
+        "h-40"
+      ]
+    ],
+    [
+      "stm32:5V.1",
+      "lcd:VCC",
+      "red",
+      [
+        "v-40",
+        "h-20"
+      ]
+    ],
+    [
+      "stm32:B7",
+      "lcd:SDA",
+      "blue",
+      [
+        "v-60",
+        "h40"
+      ]
+    ],
+    [
+      "stm32:B6",
+      "lcd:SCL",
+      "yellow",
+      [
+        "v-70",
+        "h30"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

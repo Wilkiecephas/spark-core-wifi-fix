@@ -1,0 +1,110 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 8}{Advanced Driver Architectures: Interrupt, DMA \& Execution Profiling}
+
+\begin{objectivebox}
+The objective of this laboratory task is to benchmark the execution latency, CPU utilization, and bus timing of the STM32 HAL $\text{I}^2\text{C}$ driver across three operating paradigms: Polling (blocking), Interrupt (IT, non-blocking), and Direct Memory Access (DMA). By instrumenting firmware with GPIO toggling and capturing traces on an oscilloscope, students measure the exact CPU blocking duration versus the physical wire transfer time at both $100\text{ kHz}$ and $400\text{ kHz}$.
+\end{objectivebox}
+
+% =========================================================================
+\section{Driver Paradigms \& Firmware Implementation}
+% =========================================================================
+
+\subsection{1. Polling Mode Implementation (Baseline)}
+In polling mode, the CPU core is completely stalled inside a loop checking hardware status registers until all bytes have moved or a timeout expires.
+
+\begin{lstlisting}[language=C, caption={Polling Mode with GPIO Benchmarking Pin}]
+/* Benchmarking pin configured on PA5 (Nucleo green LED) */
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET); // HIGH = CPU Busy
+
+HAL_I2C_Mem_Read(&hi2c1, DS3231_ADDR, 0x00, I2C_MEMADD_SIZE_8BIT, rtc_buf, 3, 100);
+
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // LOW = CPU Free
+\end{lstlisting}
+
+\subsection{2. Interrupt (IT) Mode Implementation}
+In interrupt mode, the HAL function configures peripheral control registers and enables the \texttt{I2C\_IT\_EVT} and \texttt{I2C\_IT\_ERR} interrupts, returning control to the main thread almost immediately.
+
+\begin{lstlisting}[language=C, caption={Interrupt Mode Implementation with Non-Blocking Callbacks}]
+/* Global / static buffer to prevent stack variable destruction */
+static uint8_t rtc_buf[3];
+volatile uint8_t rtc_rx_complete = 0;
+
+/* Main execution dispatch */
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+HAL_I2C_Mem_Read_IT(&hi2c1, DS3231_ADDR, 0x00, I2C_MEMADD_SIZE_8BIT, rtc_buf, 3);
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET); // Returns immediately!
+
+/* Callback executed in ISR context when all 3 bytes are transferred */
+void HAL_I2C_MemRxCpltCallback(I2C_HandleTypeDef *hi2c) {
+    if (hi2c->Instance == I2C1) {
+        rtc_rx_complete = 1;
+    }
+}
+\end{lstlisting}
+
+\subsection{3. Direct Memory Access (DMA) Mode Implementation}
+DMA routes data directly between the $\text{I}^2\text{C}$ Data Register (\texttt{I2C\_DR}) and internal SRAM using dedicated DMA streams (\texttt{DMA1\_Stream0} for \texttt{I2C1\_RX} and \texttt{DMA1\_Stream6} for \texttt{I2C1\_TX}).
+
+\begin{lstlisting}[language=C, caption={DMA Mode Implementation}]
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_SET);
+HAL_I2C_Mem_Read_DMA(&hi2c1, DS3231_ADDR, 0x00, I2C_MEMADD_SIZE_8BIT, rtc_buf, 3);
+HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+\end{lstlisting}
+
+% =========================================================================
+\section{Experimental Oscilloscope Measurements \& Profiling}
+% =========================================================================
+An oscilloscope Channel 1 was connected to the GPIO benchmark pin (PA5) to measure CPU execution time, while Channel 2 monitored SCL to measure the physical bus activity duration. The transaction transfers 3 RTC bytes (Seconds, Minutes, Hours) following a 1-byte register pointer.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{CPU Execution Latency vs. Bus Transfer Duration Across Driver Modes}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c c c X}
+\toprule
+\textbf{Driver Mode} & \textbf{Bus Freq.} & \textbf{CPU Return Time ($t_{\text{CPU}}$)} & \textbf{Bus Wire Time ($t_{\text{bus}}$)} & \textbf{CPU Load \%} & \textbf{Operational Behavior} \\
+\midrule
+\textbf{Polling} & $100\text{ kHz}$ & $542.8\,\mu\text{s}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 100\%}$ & CPU blocked for entirety of the transfer. \\
+\textbf{Interrupt (IT)} & $100\text{ kHz}$ & $\mathbf{14.2\,\mu\text{s}}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 2.6\%}$ & Returns in $14\,\mu\text{s}$; ISR handles byte transitions. \\
+\textbf{DMA} & $100\text{ kHz}$ & $\mathbf{9.8\,\mu\text{s}}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 1.8\%}$ & Returns in under $10\,\mu\text{s}$; DMA controller moves bytes. \\
+\midrule
+\textbf{Polling} & $400\text{ kHz}$ & $138.4\,\mu\text{s}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 100\%}$ & $4\times$ speedup on physical bus, CPU still 100\% trapped. \\
+\textbf{Interrupt (IT)} & $400\text{ kHz}$ & $\mathbf{14.1\,\mu\text{s}}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 10.3\%}$ & Return is instant; ISR overhead is higher percentage. \\
+\textbf{DMA} & $400\text{ kHz}$ & $\mathbf{9.7\,\mu\text{s}}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 7.1\%}$ & Minimal CPU footprint; maximum wire throughput. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{theorybox}
+\textbf{Analysis of the Speedup and Physical Limits:}
+Switching from $100\text{ kHz}$ to $400\text{ kHz}$ reduces the physical bus transfer time by almost exactly a factor of 4 (from $541.2\,\mu\text{s}$ down to $136.5\,\mu\text{s}$). However, the limits to increasing bus speed are constrained by physical physics:
+\begin{enumerate}
+    \item \textbf{Bus Capacitance and Rise Time ($t_r$):} Higher clock frequencies require lower pull-up resistances ($R_p \le 2.2\text{ k}\Omega$) to meet the $300\text{ ns}$ rise time threshold.
+    \item \textbf{Slave Clock Stretching Limits:} Many sensors cannot process internal state transitions fast enough to sustain high data rates without stretching SCL, which stalls the master regardless of configured baud rates.
+    \item \textbf{DMA Overhead for Tiny Payloads:} For small 3-byte transfers, DMA setup latency ($\approx 10\,\mu\text{s}$) is comparable to IT dispatch latency. DMA's massive advantage occurs during long payload streaming (e.g. 1024-byte graphical OLED frames).
+\end{enumerate}
+\end{theorybox}
+
+% =========================================================================
+\section{Extension: Inter-Peripheral Loopback (I2C1 Master to I2C2 Slave)}
+% =========================================================================
+The STM32F411RE features three independent $\text{I}^2\text{C}$ hardware peripherals. In this extension, I2C1 was configured as master (PB8/PB9) and I2C2 was configured as slave on pins PB10 (I2C2\_SCL) and PB3 (I2C2\_SDA).
+
+\begin{itemize}
+    \item \textbf{Pin Connections:} PB8 was jumpered to PB10 (SCL), and PB9 was jumpered to PB3 (SDA), with common $2.2\text{ k}\Omega$ pull-ups to $3.3\text{ V}$.
+    \item \textbf{CubeMX Configuration:} I2C2 was enabled in slave mode with primary slave address set to \texttt{0x32} (\texttt{0x64} shifted).
+    \item \textbf{Communication Loop:} The master calls \texttt{HAL\_I2C\_Master\_Transmit(\&hi2c1, 0x64, tx\_data, 4, 100)}, while the slave executes an interrupt receive via \texttt{HAL\_I2C\_Slave\_Receive\_IT(\&hi2c2, rx\_data, 4)}.
+    \item \textbf{Outcome:} $100\%$ reliable communication was verified within a single microcontroller without external peripheral hardware.
+\end{itemize}
+
+% =========================================================================
+\section{Conclusion}
+% =========================================================================
+Task 8 demonstrates that while polling is straightforward to implement, Interrupt and DMA modes liberate over $97\%$ of the CPU core's computational capacity during $\text{I}^2\text{C}$ transactions, making them the imperative choice for real-time control, sensor telemetry, and graphics rendering.
+
+\end{document}

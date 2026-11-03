@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "author": "Group 4 - KyU",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-arduino-uno",
+      "id": "uno",
+      "top": 0,
+      "left": 0
+    },
+    {
+      "type": "wokwi-lcd1602",
+      "id": "lcd",
+      "top": -180,
+      "left": 0,
+      "attrs": {
+        "pins": "i2c"
+      }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot",
+      "top": 200,
+      "left": -80
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led",
+      "top": 200,
+      "left": 200,
+      "attrs": {
+        "color": "red"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r1",
+      "top": 240,
+      "left": 200,
+      "attrs": {
+        "value": "220"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "uno:GND.1",
+      "lcd:GND",
+      "black",
+      [
+        "v-20",
+        "h-40"
+      ]
+    ],
+    [
+      "uno:5V",
+      "lcd:VCC",
+      "red",
+      [
+        "v-30",
+        "h-20"
+      ]
+    ],
+    [
+      "uno:A4",
+      "lcd:SDA",
+      "blue",
+      [
+        "v-50",
+        "h40"
+      ]
+    ],
+    [
+      "uno:A5",
+      "lcd:SCL",
+      "yellow",
+      [
+        "v-60",
+        "h30"
+      ]
+    ],
+    [
+      "uno:GND.2",
+      "pot:GND",
+      "black",
+      [
+        "v20",
+        "h-40"
+      ]
+    ],
+    [
+      "uno:5V",
+      "pot:VCC",
+      "red",
+      [
+        "v30",
+        "h-20"
+      ]
+    ],
+    [
+      "uno:A0",
+      "pot:SIG",
+      "green",
+      [
+        "v40",
+        "h0"
+      ]
+    ],
+    [
+      "uno:13",
+      "r1:1",
+      "red",
+      [
+        "v10",
+        "h50"
+      ]
+    ],
+    [
+      "r1:2",
+      "led:A",
+      "red",
+      [
+        "v10"
+      ]
+    ],
+    [
+      "led:C",
+      "uno:GND.3",
+      "black",
+      [
+        "v20",
+        "h-50"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

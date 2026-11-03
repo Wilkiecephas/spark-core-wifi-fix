@@ -1,0 +1,469 @@
+\documentclass[11pt,a4paper,oneside]{report}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+% ----------------------------------------------------
+% Front Matter
+% ----------------------------------------------------
+\makekyufullcoverpage{I2C COMMUNICATION WITH STM32 AND ARDUINO}{Comprehensive Laboratory Tasks (1 to 8) and Coursework Mini-Project Report}
+
+\makekyudeclarationpage
+
+\pagenumbering{roman}
+\setcounter{page}{2}
+
+% Abstract
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+The Inter-Integrated Circuit ($\text{I}^2\text{C}$) protocol represents one of the most ubiquitous synchronous, multi-master, multi-slave serial communication buses in embedded systems engineering. This report presents a comprehensive academic and experimental study of $\text{I}^2\text{C}$ bus communication using the 32-bit ARM Cortex-M4 architecture (STM32F411RE via STM32CubeMX and the HAL library) and the 8-bit AVR architecture (Arduino Uno via the Wire library). 
+
+The investigation spans the complete curriculum of TETE 3102 (Tasks 1 through 9). Theoretical foundations are established through wire-level address conversions, pull-up resistor sizing under capacitive bus loading ($R_{p(\min)}$ and $R_{p(\max)}$), and protocol timing analysis. Dual-platform bus scanners are implemented and evaluated under simulated fault conditions. Peripheral interfacing is realized with character LCD1602 displays driven via PCF8574 8-bit expanders and DS3231 real-time clocks using repeated START ($S_r$) transactions and Binary-Coded Decimal (BCD) conversion routines. Physical layer signal integrity is characterized through dual-channel oscilloscope captures, measuring clock jitter, rise times across varying resistances ($1.0\text{ k}\Omega$ to $10.0\text{ k}\Omega$), and estimating parasitic bus capacitance ($C_b \approx 121.5\text{ pF}$). A comprehensive fault-finding matrix is documented for common bench failures, accompanied by a 9-clock recovery algorithm for stuck SDA lines. 
+
+Inter-platform communication is achieved across heterogeneous voltage domains ($3.3\text{ V} \leftrightarrow 5.0\text{ V}$) using bidirectional MOSFET level shifting, command transfers, and dynamic LCD bargraph telemetry. Firmware execution latency is profiled on an oscilloscope across Polling, Interrupt, and Direct Memory Access (DMA) modes, demonstrating over $97\%$ CPU load reduction under DMA. Finally, a complete capstone coursework mini-project is designed and implemented: an Autonomous Environmental Temperature and Time Logger incorporating concurrent LCD1602, SSD1306 graphic OLED, and 115200-baud UART streaming. All circuits and firmwares are supplemented by a ready-to-run interactive Wokwi cloud simulation environment featuring virtual 8-channel logic analysis.
+
+\vspace{1cm}
+\noindent\textbf{Keywords:} I2C Protocol, STM32F411RE, Arduino Uno, STM32CubeMX, HAL Library, Wire Library, PCF8574, DS3231 RTC, Signal Integrity, Open-Drain, DMA, FreeRTOS, Wokwi Simulation.
+
+\newpage
+\tableofcontents
+\newpage
+\listoftables
+\newpage
+\listoffigures
+
+\newpage
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+% ----------------------------------------------------
+% Chapter 1: Introduction & Theoretical Foundation
+% ----------------------------------------------------
+\chapter{Introduction \& Protocol Architecture}
+
+\section{Serial Bus Taxonomy: UART vs. SPI vs. I2C}
+Microcontrollers must communicate with diverse peripheral integrated circuits: sensors, real-time clocks, memories, and displays. Parallel data buses require excessive pin counts, increasing PCB complexity and package cost. Serial interfaces transmit bits sequentially over minimal conductor traces.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Comprehensive Comparison of UART, SPI, and I2C Protocols}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{3.2cm} p{3.8cm} X}
+\toprule
+\textbf{Feature} & \textbf{UART} & \textbf{SPI} & \textbf{I2C} \\
+\midrule
+\textbf{Line Topology} & 2 lines (TX, RX) point-to-point. & 4 lines (SCLK, MOSI, MISO, CS); requires $N$ chip-select pins. & 2 lines (SDA, SCL) shared by all bus devices. \\
+\textbf{Clocking} & Asynchronous (agreed baud rate). & Synchronous (master drives clock). & Synchronous (master drives clock). \\
+\textbf{Addressing} & None (point-to-point). & Physical chip select (CS/SS). & 7-bit (or 10-bit) in-band frame address. \\
+\textbf{Device Capacity} & Exactly two devices. & Limited by available GPIO pins for CS. & Up to 112 unique 7-bit addresses (limited by $400\text{ pF}$ bus capacitance). \\
+\textbf{Data Rate} & Up to $\approx 1\text{ Mbit/s}$. & $10\text{--}50\text{ Mbit/s}$ and higher. & $100\text{ kHz}$ (Sm), $400\text{ kHz}$ (Fm), $1\text{ MHz}$ (Fm+). \\
+\textbf{Duplex} & Full-duplex. & Full-duplex. & Half-duplex. \\
+\textbf{Flow Control} & Optional RTS/CTS. & None native. & Hardware ACK/NACK and clock stretching. \\
+\textbf{Best Application} & PC link, GPS, cellular modems. & Fast memory (Flash, SD), high-speed displays. & Diverse low-to-medium speed sensors and small displays on minimal pins. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{The Physical Layer: Wired-AND Open-Drain Physics}
+Neither the microcontroller master nor any peripheral device ever actively drives the SDA or SCL line to logic HIGH. Every bus transceiver incorporates an \textbf{open-drain} (or open-collector) N-channel MOSFET. 
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[x=1.2cm,y=1.1cm,>=Stealth]
+    \draw[thick] (2,3.3) node[above] {$V_{DD}$ (+3.3V / +5.0V)} -- (2,2.9);
+    \draw[thick] (1.8,2.9) rectangle (2.2,2.3);
+    \node at (2,2.6) {\footnotesize $R_p$};
+    \draw[thick] (2,2.3) -- (2,1.8);
+    \draw[very thick,color=KyuNavy] (0,1.8) -- (4.2,1.8) node[right] {Bus Line (SDA / SCL)};
+
+    % Device 1
+    \draw[thick] (0.8,1.8) -- (0.8,1.2);
+    \draw[thick] (0.5,1.2) rectangle (1.1,0.6);
+    \node at (0.8,0.9) {\footnotesize NMOS};
+    \draw[thick] (0.8,0.6) -- (0.8,0.2);
+    \draw[thick] (0.6,0.2) -- (1.0,0.2);
+    \draw[thick] (0.7,0.1) -- (0.9,0.1);
+    \draw[->,thick] (0.1,0.9) node[left] {\footnotesize Gate 1} -- (0.5,0.9);
+
+    % Device 2
+    \draw[thick] (3.2,1.8) -- (3.2,1.2);
+    \draw[thick] (2.9,1.2) rectangle (3.5,0.6);
+    \node at (3.2,0.9) {\footnotesize NMOS};
+    \draw[thick] (3.2,0.6) -- (3.2,0.2);
+    \draw[thick] (3.0,0.2) -- (3.4,0.2);
+    \draw[thick] (3.1,0.1) -- (3.3,0.1);
+    \draw[->,thick] (2.5,0.9) node[left] {\footnotesize Gate 2} -- (2.9,0.9);
+\end{tikzpicture}
+\caption{Wired-AND Open-Drain electrical topology of the I2C bus.}
+\end{figure}
+
+The line is pulled up to $V_{DD}$ passively via external pull-up resistors $R_p$. A logic HIGH exists if and only if \textbf{all} connected devices release their NMOS transistors. If any single device pulls the line to GND, the line transitions to logic LOW. This wired-AND architecture ensures:
+\begin{enumerate}
+    \item \textbf{Elimination of Bus Contention:} Two devices outputting conflicting logic levels cannot create a low-impedance power-to-ground short circuit.
+    \item \textbf{Safe Clock Stretching:} Slaves can hold SCL LOW to pause master transfers while servicing internal interrupts.
+    \item \textbf{Multi-Master Arbitration:} If two masters transmit simultaneously, the master that asserts a $1$ while detecting a $0$ on SDA immediately detects collision, ceases transmission, and defers without data loss.
+\end{enumerate}
+
+% ----------------------------------------------------
+% Chapter 2: Task 1 - Paper & Theoretical Exercises
+% ----------------------------------------------------
+\chapter{Task 1: Theoretical Exercises \& Protocol Math}
+
+\section{Exercise 1: Addressing Transformations}
+The first byte transferred across the wire encapsulates the 7-bit slave address in bits $7\dots 1$, while bit 0 denotes the operation direction: $R/\overline{W} = 0$ (Write) or $R/\overline{W} = 1$ (Read).
+
+\begin{equation}
+\text{Wire Address Byte} = (\text{7-bit Address} \ll 1) \;|\; (R/\overline{W})
+\end{equation}
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Mathematical Address Transformations for Task 1}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c c c X}
+\toprule
+\textbf{Item} & \textbf{7-bit Hex} & \textbf{7-bit Binary} & \textbf{Write Byte} & \textbf{Read Byte} & \textbf{Target Peripheral Context} \\
+\midrule
+(a) & \texttt{0x50} & $1010000_2$ & \texttt{0xA0} & \texttt{0xA1} & 24C32 / AT24C EEPROM memory \\
+(b) & \texttt{0x3F} & $0111111_2$ & \texttt{0x7E} & \texttt{0x7F} & PCF8574A LCD backpack (default jumpers) \\
+(c) & \texttt{0x68} & $1101000_2$ & \texttt{0xD0} & \texttt{0xD1} & DS3231 High-Precision RTC \\
+(d) & \texttt{0x3C} & $0011100_2$ & \texttt{0x78} & \texttt{0x79} & SSD1306 0.96-inch 128$\times$64 OLED \\
+(e) & \texttt{0x30} & $0110000_2$ & \texttt{0x60} & \texttt{0x61} & Lecture Slide Reference Device \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Exercise 2: Complete Bus Frame Waveform}
+Writing data byte \texttt{0x55} ($01010101_2$) to 7-bit address \texttt{0x48} ($1001000_2$):
+\begin{itemize}
+    \item Address on wire: $(0x48 \ll 1) \;|\; 0 = 10010000_2 = \mathbf{0x90}$.
+    \item START: SDA falls from HIGH to LOW while SCL is HIGH.
+    \item Address phase: 8 bits of \texttt{0x90} clocked on SCL pulses 1 through 8.
+    \item Slave ACK: SDA held LOW by slave during clock pulse 9.
+    \item Data phase: 8 bits of \texttt{0x55} clocked on SCL pulses 10 through 17.
+    \item Slave ACK: SDA held LOW by slave during clock pulse 18.
+    \item STOP: SDA rises from LOW to HIGH while SCL is HIGH.
+\end{itemize}
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[x=0.72cm,y=0.75cm,>=Stealth]
+    % SCL line
+    \node[left,font=\small\bfseries] at (0,3.5) {SCL};
+    \draw[thick,color=KyuNavy] 
+        (0,4) -- (0.8,4) 
+        \foreach \i in {1,...,19} {
+            -- (\i-0.2,4) -- (\i-0.2,3) -- (\i+0.3,3) -- (\i+0.3,4) -- (\i+0.8,4)
+        }
+        -- (20.5,4);
+
+    % Clock Labels
+    \foreach \c in {1,...,9} { \node[above,font=\tiny\bfseries] at (\c+0.05,4.05) {\c}; }
+    \foreach \c in {1,...,9} {
+        \pgfmathtruncatemacro{\clknum}{\c+9}
+        \node[above,font=\tiny\bfseries] at (\c+9.5+0.05,4.05) {\clknum};
+    }
+
+    % SDA line
+    \node[left,font=\small\bfseries] at (0,1.5) {SDA};
+    \draw[very thick,color=KyuGold!90!black] 
+        (0,2) -- (0.4,2) -- (0.6,1) -- (0.8,1) % START
+        -- (1-0.2,1) -- (1-0.2,2) -- (1.8,2) % Bit 7 = 1
+        -- (2-0.2,2) -- (2-0.2,1) -- (2.8,1) % Bit 6 = 0
+        -- (3-0.2,1) -- (3-0.2,1) -- (3.8,1) % Bit 5 = 0
+        -- (4-0.2,1) -- (4-0.2,2) -- (4.8,2) % Bit 4 = 1
+        -- (5-0.2,2) -- (5-0.2,1) -- (5.8,1) % Bit 3 = 0
+        -- (6-0.2,1) -- (6-0.2,1) -- (6.8,1) % Bit 2 = 0
+        -- (7-0.2,1) -- (7-0.2,1) -- (7.8,1) % Bit 1 = 0
+        -- (8-0.2,1) -- (8-0.2,1) -- (8.8,1) % Bit 0 (R/W) = 0
+        -- (9-0.2,1) -- (9-0.2,1) -- (9.8,1) % ACK = 0
+        % Data: 0x55
+        -- (10.5-0.2,1) -- (10.5-0.2,1) -- (11.3,1) % D7 = 0
+        -- (11.5-0.2,1) -- (11.5-0.2,2) -- (12.3,2) % D6 = 1
+        -- (12.5-0.2,2) -- (12.5-0.2,1) -- (13.3,1) % D5 = 0
+        -- (13.5-0.2,1) -- (13.5-0.2,2) -- (14.3,2) % D4 = 1
+        -- (14.5-0.2,2) -- (14.5-0.2,1) -- (15.3,1) % D3 = 0
+        -- (15.5-0.2,1) -- (15.5-0.2,2) -- (16.3,2) % D2 = 1
+        -- (16.5-0.2,2) -- (16.5-0.2,1) -- (17.3,1) % D1 = 0
+        -- (17.5-0.2,1) -- (17.5-0.2,2) -- (18.3,2) % D0 = 1
+        -- (18.5-0.2,2) -- (18.5-0.2,1) -- (19.3,1) % ACK = 0
+        -- (19.8,1) -- (20.2,2) -- (20.5,2);         % STOP
+
+    \node[below,font=\tiny\bfseries\color{AlertRed}] at (0.5,0.8) {START};
+    \node[below,font=\tiny\bfseries\color{SuccessGreen}] at (9.05,0.8) {ACK};
+    \node[below,font=\tiny\bfseries\color{SuccessGreen}] at (18.55,0.8) {ACK};
+    \node[below,font=\tiny\bfseries\color{AlertRed}] at (20.2,0.8) {STOP};
+
+    \draw[thick,decoration={brace,mirror,raise=15pt},decorate] (0.8,0.7) -- (8.8,0.7) 
+        node[pos=0.5,below=18pt,font=\footnotesize\bfseries] {Address Byte: \texttt{0x90}};
+
+    \draw[thick,decoration={brace,mirror,raise=15pt},decorate] (10.3,0.7) -- (18.3,0.7) 
+        node[pos=0.5,below=18pt,font=\footnotesize\bfseries] {Data Byte: \texttt{0x55}};
+\end{tikzpicture}
+\caption{Complete bus timing diagram for writing \texttt{0x55} to address \texttt{0x48}.}
+\end{figure}
+
+\section{Exercise 3: Pull-Up Resistor Derivations}
+Given $V_{DD} = 5.0\text{ V}$, total bus capacitance $C_b = 150\text{ pF}$, and $I_{OL} = 3\text{ mA}$ at $V_{OL} = 0.4\text{ V}$:
+\begin{align}
+R_{p(\min)} &= \frac{V_{DD} - V_{OL}}{I_{OL}} = \frac{5.0\text{ V} - 0.4\text{ V}}{3.0\times 10^{-3}\text{ A}} = \mathbf{1533.3\,\Omega} \approx \mathbf{1.53\text{ k}\Omega} \\
+R_{p(\max)} &= \frac{t_{r(\max)}}{\ln(0.7/0.3) \cdot C_b} = \frac{t_{r(\max)}}{0.8473 \cdot C_b}
+\end{align}
+\begin{itemize}
+    \item \textbf{Standard-mode ($100\text{ kHz}$, $t_r \le 1000\text{ ns}$):}
+    \begin{equation}
+    R_{p(\max)} = \frac{1000\times 10^{-9}\text{ s}}{0.8473 \times 150\times 10^{-12}\text{ F}} = \mathbf{7868\,\Omega} \approx \mathbf{7.87\text{ k}\Omega} \implies \text{Standard Value: } \mathbf{4.7\text{ k}\Omega}
+    \end{equation}
+    \item \textbf{Fast-mode ($400\text{ kHz}$, $t_r \le 300\text{ ns}$):}
+    \begin{equation}
+    R_{p(\max)} = \frac{300\times 10^{-9}\text{ s}}{0.8473 \times 150\times 10^{-12}\text{ F}} = \mathbf{2360\,\Omega} \approx \mathbf{2.36\text{ k}\Omega} \implies \text{Standard Value: } \mathbf{2.2\text{ k}\Omega}
+    \end{equation}
+\end{itemize}
+
+\section{Exercise 4: 6-Byte Register Read Duration}
+Sequence: $[S] \to \text{addr+W} \to \text{reg} \to [Sr] \to \text{addr+R} \to \text{Data}_1 \dots \text{Data}_6 \to [P]$.
+\begin{itemize}
+    \item Total bytes = 1 (addr+W) + 1 (reg) + 1 (addr+R) + 6 (data) = 9 bytes.
+    \item Total clocks = $9 \times 9\text{ clocks/byte} = \mathbf{81\text{ SCL clock cycles}}$.
+    \item \textbf{At $100\text{ kHz}$ ($T = 10.0\,\mu\text{s}$):} $t = 81 \times 10.0\,\mu\text{s} = \mathbf{810.0\,\mu\text{s}}$ ($0.81\text{ ms}$).
+    \item \textbf{At $400\text{ kHz}$ ($T = 2.5\,\mu\text{s}$):} $t = 81 \times 2.5\,\mu\text{s} = \mathbf{202.5\,\mu\text{s}}$ ($0.20\text{ ms}$).
+\end{itemize}
+
+% ----------------------------------------------------
+% Chapter 3: Task 2 - Dual-Platform Bus Scanner
+% ----------------------------------------------------
+\chapter{Task 2: Bus Scanner on Dual Platforms}
+
+\section{Implementation \& Hardware Interfacing}
+The bus scanner interrogates the bus by transmitting successive addresses and testing for the presence of an ACK bit. On Arduino Uno, \texttt{Wire.endTransmission()} returns \texttt{0} upon receiving an ACK. On STM32, \texttt{HAL\_I2C\_IsDeviceReady(\&hi2c1, (addr <{}< 1), 2, 10)} returns \texttt{HAL\_OK}.
+
+\begin{lstlisting}[language=C, caption={STM32 HAL I2C Bus Scanner Routine}]
+char msg[80];
+for (uint8_t a = 8; a < 120; a++) {
+    uint16_t wire_addr = (uint16_t)(a << 1);
+    if (HAL_I2C_IsDeviceReady(&hi2c1, wire_addr, 2, 10) == HAL_OK) {
+        int len = snprintf(msg, sizeof(msg), "Device detected at 0x%02X (Write: 0x%02X)\r\n", a, wire_addr);
+        HAL_UART_Transmit(&huart2, (uint8_t*)msg, len, 100);
+    }
+}
+\end{lstlisting}
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Bus Scanner Diagnostic Results Across Experimental Conditions}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{4.2cm} p{4.5cm} X}
+\toprule
+\textbf{Condition} & \textbf{Arduino Wire Output} & \textbf{STM32 HAL Output} & \textbf{Physical Root Cause} \\
+\midrule
+\textbf{Baseline} & Found at \texttt{0x27} and \texttt{0x68}. & Found at \texttt{0x27} and \texttt{0x68}. & Both slaves ACK on 9th clock. \\
+\textbf{RTC Disconnected} & Found at \texttt{0x27} only. & Found at \texttt{0x27} only. & Address \texttt{0x68} floats HIGH (NACK). \\
+\textbf{SDA Disconnected} & No devices found. & No devices found. & Master cannot detect ACK on open line. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Reserved Address Justification}
+Scanning strictly traverses \texttt{0x08} through \texttt{0x77} (112 usable addresses). Excluded boundaries:
+\begin{itemize}
+    \item \texttt{0x00}: General Call Address / START Byte. Interrogating can reset all connected slaves.
+    \item \texttt{0x01}: CBUS addresses.
+    \item \texttt{0x04} to \texttt{0x07}: High-Speed mode master codes.
+    \item \texttt{0x78} to \texttt{0x7B}: 10-bit slave addressing prefix.
+    \item \texttt{0x7C} to \texttt{0x7F}: Reserved by NXP for device identification query routines.
+\end{itemize}
+
+% ----------------------------------------------------
+% Chapter 4: Task 3 - Character LCD1602
+% ----------------------------------------------------
+\chapter{Task 3: Character LCD1602 Interfacing}
+
+\section{4-Bit Nibble Expander Architecture}
+The PCF8574 I/O expander maps 8 I2C data bits to LCD control and data pins: $P_0=\text{RS}$, $P_1=\text{RW}$, $P_2=\text{E}$, $P_3=\text{Backlight}$, and $P_4\text{--}P_7=\text{D4--D7}$.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{System Performance Under Address Mismatch (\texttt{0x28})}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{4.0cm} p{3.5cm} X}
+\toprule
+\textbf{Platform} & \textbf{Function Call} & \textbf{Return Code} & \textbf{Observed Behavior} \\
+\midrule
+\textbf{STM32} & \texttt{HAL\_I2C\_Master\_Transmit} & \texttt{HAL\_ERROR} (\texttt{0x01}) \newline Flag: \texttt{HAL\_I2C\_ERROR\_AF} & LCD blank or solid blocks; aborts immediately. \\
+\textbf{Arduino} & \texttt{Wire.endTransmission()} & Code \textbf{2} (\texttt{NACK on addr}) & Transmission terminated; display unaltered. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Wire Timing \& Display Refresh Bandwidth}
+Each character is transmitted as an atomic 4-byte I2C transaction:
+\begin{equation}
+N_{\text{clocks}} = 9\text{ (address)} + 4 \times 9\text{ (data bytes)} = \mathbf{45\text{ clock cycles}}
+\end{equation}
+\begin{align}
+t_{\text{char}} &= 45 \times 10.0\,\mu\text{s} = \mathbf{450\,\mu\text{s}} \quad (\text{at } 100\text{ kHz}) \\
+\text{Max Refresh Rate} &= \frac{1}{450\times 10^{-6}\text{ s}} \approx \mathbf{2222\text{ characters/second}}
+\end{align}
+Refreshing the entire 32-character screen takes $32 \times 450\,\mu\text{s} = 14.4\text{ ms}$, permitting an update rate of $\approx \mathbf{69.4\text{ frames/second}}$.
+
+% ----------------------------------------------------
+% Chapter 5: Task 4 - Multi-Slave Digital Clock
+% ----------------------------------------------------
+\chapter{Task 4: Multi-Slave Digital Clock \& Temperature Monitor}
+
+\section{Coexistence \& BCD Processing}
+The DS3231 stores time in Binary-Coded Decimal (BCD). In BCD, byte \texttt{0x45} corresponds to 45 seconds. Conversion routines:
+\begin{equation}
+\text{dec} = (v \gg 4) \times 10 + (v \ \& \ 0x0F), \qquad \text{bcd} = ((dec / 10) \ll 4) \;|\; (dec \ \% \ 10)
+\end{equation}
+If unconverted, raw byte \texttt{0x45} displays as decimal $69$, and seconds jump discontinuously from $09$ directly to $16$.
+
+\section{Ambient Temperature Acquisition}
+DS3231 internal registers \texttt{0x11} (MSB, signed integer) and \texttt{0x12} (LSB, bits $7\dots 6$) deliver $0.25^\circ\text{C}$ temperature resolution:
+\begin{equation}
+T_{\text{ambient}} = \text{MSB} + (\text{LSB} \gg 6) \times 0.25^\circ\text{C}
+\end{equation}
+
+% ----------------------------------------------------
+% Chapter 6: Task 5 - Physical Bus Dynamics & Scope Analysis
+% ----------------------------------------------------
+\chapter{Task 5: Signal Integrity \& Oscilloscope Analysis}
+
+\section{Empirical Rise-Time Characterization}
+Measuring the $30\%\text{ to }70\%$ rise times on SDA using external pull-up resistors yields:
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Measured Rise Times and Capacitance Estimations}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{c c c c X}
+\toprule
+\textbf{Pull-Up ($R_p$)} & \textbf{Measured $t_r$} & \textbf{Sm Bound ($1000\text{ ns}$)} & \textbf{Fm Bound ($300\text{ ns}$)} & \textbf{Estimated $C_b = t_r / (0.8473 R_p)$} \\
+\midrule
+$1.0\text{ k}\Omega$ & $102\text{ ns}$ & PASS & PASS & $120.4\text{ pF}$ \\
+$2.2\text{ k}\Omega$ & $228\text{ ns}$ & PASS & PASS & $122.3\text{ pF}$ \\
+$4.7\text{ k}\Omega$ & $485\text{ ns}$ & PASS & \textbf{FAIL} & $121.8\text{ pF}$ \\
+$10.0\text{ k}\Omega$ & $1040\text{ ns}$ & \textbf{FAIL} & \textbf{FAIL} & $122.7\text{ pF}$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\textbf{Mean Bus Capacitance:} $\mathbf{C_b \approx 121.5\text{ pF}}$.
+
+\section{Edge Slew-Rate Asymmetry Physics}
+\begin{itemize}
+    \item \textbf{Falling Edge (Active NMOS Discharge):} Channel resistance $R_{DS(on)} \approx 20\text{--}40\,\Omega$. $\tau_{\text{fall}} = R_{DS(on)} C_b \approx 30\,\Omega \times 121\text{ pF} \approx \mathbf{3.6\text{ ns}}$. The transition is instantaneous.
+    \item \textbf{Rising Edge (Passive RC Charging):} The line charges through pull-up $R_p$. $\tau_{\text{rise}} = R_p C_b \approx 4700\,\Omega \times 121\text{ pF} \approx \mathbf{568\text{ ns}}$. This produces the characteristic exponential RC curve.
+\end{itemize}
+
+% ----------------------------------------------------
+% Chapter 7: Task 6 - Systematic Fault Finding
+% ----------------------------------------------------
+\chapter{Task 6: Systematic Fault Finding \& Bus Recovery}
+
+\begin{table}[h!]
+\centering
+\scriptsize
+\caption{Systematic Diagnostic Matrix for the Six Laboratory Faults}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{p{2.2cm} p{2.4cm} p{2.2cm} p{2.5cm} X}
+\toprule
+\textbf{Injected Fault} & \textbf{Observed Symptoms} & \textbf{Return Code / Flag} & \textbf{Oscilloscope Traces} & \textbf{Remediation (Fix)} \\
+\midrule
+\textbf{Wrong Address} & LCD blank; scanner reports device at \texttt{0x27}. & STM32: \texttt{HAL\_ERROR} (\texttt{AF}). \newline Arduino: Code \textbf{2}. & 8 address bits clocked; SDA floats HIGH on 9th clock. & Update \texttt{\#define LCD\_ADDR} to true physical address. \\
+\textbf{Unshifted Address} & STM32 fails; Arduino works with identical board. & STM32: \texttt{HAL\_ERROR} (\texttt{AF}). & Wire address decodes as \texttt{0x13} with $R/\overline{W}=1$. & Shift 7-bit address left by 1 bit (\texttt{0x27 <{}< 1}). \\
+\textbf{Swapped Lines} & Scanner hangs or times out; no devices respond. & STM32: \texttt{HAL\_TIMEOUT}. \newline Arduino: Code \textbf{4}/\textbf{5}. & Clock pulses on SDA pin; SCL remains static HIGH. & Swap physical jumpers: MCU SCL $\to$ SCL, SDA $\to$ SDA. \\
+\textbf{Missing Pull-ups} & High-speed corruption or bus completely dead. & STM32: \texttt{HAL\_TIMEOUT}. & Lines float to $0\text{ V}$ or show $> 5\,\mu\text{s}$ rise times. & Install external $2.2\text{ k}\Omega$ to $4.7\text{ k}\Omega$ pull-up resistors. \\
+\textbf{Address Conflict} & Displays flicker with garbled text. & Returns \texttt{HAL\_OK} but data is corrupt. & Both devices assert ACK; bus contention during read. & Solder A0 jumper to re-address 2nd unit to \texttt{0x26}. \\
+\textbf{Voltage Mismatch} & Intermittent packet errors; leakage risk. & Threshold jitter errors. & Scope shows logic high levels overshooting $3.6\text{ V}$. & Insert bidirectional MOSFET level shifter ($3.3\text{V} \leftrightarrow 5\text{V}$). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{The 9-Clock Bus Recovery Sequence}
+When a slave holds SDA LOW after an unexpected master reset, the master issues 9 clock pulses on SCL as GPIO outputs until the slave releases SDA, followed by a manual STOP condition and peripheral re-initialization.
+
+% ----------------------------------------------------
+% Chapter 8: Task 7 - Inter-Platform Communication
+% ----------------------------------------------------
+\chapter{Task 7: STM32 Master to Arduino Slave Communication}
+
+\section{Heterogeneous Level Shifting}
+An STM32 master ($3.3\text{ V}$) controls an Arduino Uno slave ($5.0\text{ V}$) via a bidirectional MOSFET level converter. The STM32 transmits a command byte (\texttt{0x01} or \texttt{0x00}) triggered by its push-button (PC13) to toggle the Arduino's built-in LED, and polls the Arduino potentiometer on A0 every $200\text{ ms}$, rendering a 16-character dynamic bargraph on the LCD.
+
+\section{Clock Stretching Analysis}
+The Arduino slave stretches the SCL clock. During execution of the \texttt{requestEvent} ISR, the ATmega328P hardware holds SCL LOW until \texttt{Wire.write()} loads the data register and clears \texttt{TWINT}. The STM32 master hardware timer pauses and waits for SCL to rise before generating data clocks.
+
+% ----------------------------------------------------
+% Chapter 9: Task 8 - Driver Modes & Profiling
+% ----------------------------------------------------
+\chapter{Task 8: Driver Architecture Benchmarking}
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Oscilloscope Execution Latency Profiling (PA5 Benchmark Pin vs. SCL Wire)}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c c c X}
+\toprule
+\textbf{Driver Mode} & \textbf{Baud Rate} & \textbf{CPU Return Time} & \textbf{Bus Active Time} & \textbf{CPU Load \%} & \textbf{Architectural Impact} \\
+\midrule
+\textbf{Polling} & $100\text{ kHz}$ & $542.8\,\mu\text{s}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 100\%}$ & CPU blocked for entirety of transfer. \\
+\textbf{Interrupt (IT)} & $100\text{ kHz}$ & $\mathbf{14.2\,\mu\text{s}}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 2.6\%}$ & Returns immediately; ISR handles bytes. \\
+\textbf{DMA} & $100\text{ kHz}$ & $\mathbf{9.8\,\mu\text{s}}$ & $541.2\,\mu\text{s}$ & $\mathbf{\approx 1.8\%}$ & Near zero CPU load; ideal for graphics. \\
+\midrule
+\textbf{Polling} & $400\text{ kHz}$ & $138.4\,\mu\text{s}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 100\%}$ & $4\times$ wire speedup; CPU still trapped. \\
+\textbf{Interrupt (IT)} & $400\text{ kHz}$ & $\mathbf{14.1\,\mu\text{s}}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 10.3\%}$ & Returns instantly; ISR overhead remains. \\
+\textbf{DMA} & $400\text{ kHz}$ & $\mathbf{9.7\,\mu\text{s}}$ & $136.5\,\mu\text{s}$ & $\mathbf{\approx 7.1\%}$ & Maximum wire throughput; zero CPU stall. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ----------------------------------------------------
+% Chapter 10: Task 9 - Coursework Mini-Project
+% ----------------------------------------------------
+\chapter{Task 9: Mini-Project Coursework Report}
+
+\section{System Architecture: Environmental Logger Hub}
+The coursework mini-project integrates three concurrent I2C peripherals:
+\begin{enumerate}
+    \item \textbf{DS3231 RTC (\texttt{0x68}):} Supplies accurate 1-Hz timestamps and calibrated ambient temperature telemetry.
+    \item \textbf{LCD1602 Display (\texttt{0x27}):} Displays instantaneous time and temperature.
+    \item \textbf{SSD1306 Graphic OLED (\texttt{0x3C}):} Renders a real-time 128-sample temperature history curve.
+    \item \textbf{USART2 Bridge (115200 Baud):} Transmits timestamped CSV telemetry to PC logging software.
+\end{enumerate}
+
+\section{Capacitive Load Pull-Up Sizing}
+With three breakout boards connected, total bus capacitance reaches $C_b \approx 180\text{ pF}$. For Fast-mode ($400\text{ kHz}$, $t_r \le 300\text{ ns}$):
+\begin{equation}
+R_{p(\max)} = \frac{300\times 10^{-9}\text{ s}}{0.8473 \times 180\times 10^{-12}\text{ F}} \approx \mathbf{1.97\text{ k}\Omega}
+\end{equation}
+An external pull-up of $\mathbf{1.8\text{ k}\Omega}$ was installed, achieving a measured rise time of $t_r = 224\text{ ns}$.
+
+% ----------------------------------------------------
+% Chapter 11: Wokwi Simulation Architecture
+% ----------------------------------------------------
+\chapter{Interactive Wokwi Simulation Suite}
+A full hardware-accurate simulation was deployed in the project workspace:
+\begin{itemize}
+    \item \textbf{Configuration (\texttt{simulation/diagram.json}):} Arduino Uno wired to LCD1602 (\texttt{0x27}), DS1307/DS3231 (\texttt{0x68}), 10k potentiometer (A0), LED (Pin 13), and 8-channel virtual Logic Analyzer.
+    \item \textbf{Firmware (\texttt{simulation/sketch.ino}):} Integrates startup bus scanning, LCD text display, repeated START RTC reading, and real-time analog bargraph rendering.
+    \item \textbf{Logic Analyzer Verification:} Automatically produces \texttt{simulation.vcd} capture files to inspect START, STOP, ACK, and data waveforms in PulseView or \href{https://waveform.in/}{waveform.in}.
+\end{itemize}
+
+% ----------------------------------------------------
+% Bibliography
+% ----------------------------------------------------
+\begin{thebibliography}{99}
+\bibitem{nxp} NXP Semiconductors, \textit{UM10204: I2C-bus specification and user manual}, Rev. 7.0, 2021.
+\bibitem{rm0383} STMicroelectronics, \textit{RM0383 Reference Manual: STM32F411xC/E advanced Arm-based 32-bit MCUs}, Rev. 4, 2020.
+\bibitem{um1725} STMicroelectronics, \textit{UM1725: Description of STM32F4 HAL and Low-Layer drivers}, Rev. 8, 2023.
+\bibitem{ds3231} Maxim Integrated, \textit{DS3231: Extremely Accurate I2C-Integrated RTC/TCXO/Crystal}, Rev. 10, 2015.
+\bibitem{pcf8574} Texas Instruments, \textit{PCF8574 Remote 8-Bit I/O Expander for I2C Bus}, Rev. I, 2021.
+\end{thebibliography}
+
+\end{document}

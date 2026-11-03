@@ -1,0 +1,255 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{i2c_report_style}[2026/11/02 Kyambogo University TETE3102 Times New Roman Style]
+
+% ----------------------------------------------------
+% Typography & Engine Setup (Times New Roman)
+% ----------------------------------------------------
+\RequirePackage[utf8]{inputenc}
+\RequirePackage[T1]{fontenc}
+\RequirePackage{times} % Clean Times New Roman
+\RequirePackage{mathptmx} % Matching Times math
+\RequirePackage[margin=2.0cm,headheight=14pt,bottom=2.2cm,top=2.2cm]{geometry}
+\RequirePackage{fancyhdr}
+\RequirePackage{xcolor}
+\RequirePackage{graphicx}
+\RequirePackage{booktabs}
+\RequirePackage{tabularx}
+\RequirePackage{multirow}
+\RequirePackage{amsmath,amssymb}
+\RequirePackage{listings}
+\RequirePackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\RequirePackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning,shapes.geometric,decorations.pathreplacing}
+\RequirePackage{hyperref}
+
+% ----------------------------------------------------
+% Color Palette Definition
+% ----------------------------------------------------
+\definecolor{KyuNavy}{RGB}{20, 45, 90}       % KyU Primary
+\definecolor{KyuGold}{RGB}{204, 142, 0}      % KyU Gold Accent
+\definecolor{DarkSlate}{RGB}{40, 50, 65}     % Body secondary
+\definecolor{LightBg}{RGB}{248, 250, 252}    % Box fill
+\definecolor{BorderGrey}{RGB}{218, 224, 233} % Borders
+\definecolor{CodeBg}{RGB}{246, 248, 250}     % Code background
+\definecolor{SuccessGreen}{RGB}{34, 139, 34} % Success
+\definecolor{AlertRed}{RGB}{180, 40, 40}     % Alert
+
+% ----------------------------------------------------
+% Hyperref Setup
+% ----------------------------------------------------
+\hypersetup{
+    colorlinks=true,
+    linkcolor=KyuNavy,
+    citecolor=KyuNavy,
+    urlcolor=KyuNavy,
+    pdftitle={TETE 3102 I2C Communication Laboratory Report},
+    pdfauthor={Group 4 - Kyambogo University}
+}
+
+% ----------------------------------------------------
+% Header & Footer Settings (Footer replaces Lecturer with Group Number)
+% ----------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{DarkSlate}\textbf{KYAMBOGO UNIVERSITY} $\cdot$ Dept. of Electrical \& Electronics Engineering}
+\fancyhead[R]{\small\color{KyuNavy}\textbf{TETE 3102: Microcontrollers}}
+\fancyfoot[L]{\footnotesize\color{DarkSlate}I2C Communication with STM32 \& Arduino}
+\fancyfoot[C]{\footnotesize\color{DarkSlate}\thepage}
+\fancyfoot[R]{\footnotesize\color{KyuNavy}\textbf{Group: 4}} % Replaced Lecturer with Group Number
+\renewcommand{\headrulewidth}{0.6pt}
+\renewcommand{\footrulewidth}{0.4pt}
+
+% ----------------------------------------------------
+% Custom Box Environments
+% ----------------------------------------------------
+\newtcolorbox{objectivebox}[1][]{
+    enhanced,
+    colback=LightBg,
+    colframe=KyuNavy,
+    fonttitle=\bfseries\color{white},
+    coltitle=white,
+    title={\textbf{OBJECTIVE \& LAB FOCUS}},
+    boxrule=0.8pt,
+    arc=2mm,
+    drop shadow=black!10,
+    before skip=8pt,
+    after skip=8pt,
+    #1
+}
+
+\newtcolorbox{theorybox}[1][]{
+    enhanced,
+    colback=white,
+    colframe=KyuGold!90!black,
+    fonttitle=\bfseries\color{black},
+    coltitle=black,
+    title={\textbf{THEORETICAL FOUNDATION \& PROTOCOL RULES}},
+    boxrule=0.8pt,
+    arc=2mm,
+    before skip=8pt,
+    after skip=8pt,
+    #1
+}
+
+\newtcolorbox{troublebox}[1][]{
+    enhanced,
+    colback=AlertRed!5!white,
+    colframe=AlertRed,
+    fonttitle=\bfseries\color{white},
+    title={\textbf{HARDWARE \& PROTOCOL TROUBLESHOOTING NOTE}},
+    boxrule=0.8pt,
+    arc=2mm,
+    before skip=8pt,
+    after skip=8pt,
+    #1
+}
+
+\newtcolorbox{questionbox}[2][]{
+    enhanced,
+    colback=LightBg,
+    colframe=KyuNavy!80!black,
+    fonttitle=\bfseries\color{white},
+    title={Task Question #2},
+    boxrule=0.7pt,
+    arc=2mm,
+    before skip=8pt,
+    after skip=8pt,
+    #1
+}
+
+% ----------------------------------------------------
+% Code Listing Setup
+% ----------------------------------------------------
+\lstdefinestyle{customc}{
+    backgroundcolor=\color{CodeBg},
+    basicstyle=\ttfamily\footnotesize\color{black},
+    keywordstyle=\bfseries\color{KyuNavy},
+    commentstyle=\itshape\color{gray},
+    stringstyle=\color{KyuGold!80!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=7pt,
+    frame=single,
+    rulecolor=\color{BorderGrey},
+    breaklines=true,
+    breakatwhitespace=true,
+    tabsize=2,
+    showstringspaces=false
+}
+
+\lstset{style=customc}
+
+% ----------------------------------------------------
+% Single-Task Header Macro (Full Group Names & Reg Numbers, No Date)
+% ----------------------------------------------------
+\newcommand{\makekyureportheader}[2]{
+    \begin{center}
+        \includegraphics[width=2.2cm]{kyu_logo.png}\\[4pt]
+        {\LARGE \textbf{\color{KyuNavy}KYAMBOGO UNIVERSITY}}\\[2pt]
+        {\large \textbf{FACULTY OF ENGINEERING $\cdot$ DEPARTMENT OF ELECTRICAL AND ELECTRONICS}}\\[3pt]
+        {\normalsize \textbf{TETE 3102: MICROCONTROLLERS AND APPLICATIONS}}\\[5pt]
+        \color{KyuGold}\hrule height 1.5pt \color{black}\vspace{6pt}
+        {\Large \textbf{\color{KyuNavy}#1}}\\[3pt]
+        {\large \color{DarkSlate}#2}\\[8pt]
+        
+        \small
+        \begin{tabularx}{\textwidth}{X r}
+            \textbf{Mukama Robert} (26/U/ETE/21285/PE) & \textbf{Group Number:} Group 4 \\
+            \textbf{Nabudere Zerubabel} (25/U/ETE/05465/PE) & \textbf{Platforms:} STM32F411RE \\
+            \textbf{Nanfuka Shakirah} (25/U/ETE/05468/PE) & \& Arduino Uno \\
+            \textbf{Kidega Wilkie Cephas} (25/U/ETE/05460/PE) & \textbf{Course Supervisor:} Dr. Mugerwa Dickson PhD \\
+        \end{tabularx}
+        \vspace{4pt}
+        \color{BorderGrey}\hrule height 0.6pt \color{black}
+    \end{center}
+    \vspace{6pt}
+}
+
+% ----------------------------------------------------
+% Full Academic Cover Page (Without Date, With Full Names & Reg Numbers)
+% ----------------------------------------------------
+\newcommand{\makekyufullcoverpage}[2]{
+    \begin{titlepage}
+        \centering
+        \vspace*{0.3cm}
+        \includegraphics[width=2.6cm]{kyu_logo.png}\\[12pt]
+        {\Large \textbf{KYAMBOGO UNIVERSITY}}\\[4pt]
+        {\large \textbf{FACULTY OF ENGINEERING}}\\[3pt]
+        {\normalsize \textbf{DEPARTMENT OF ELECTRICAL AND ELECTRONICS ENGINEERING}}\\[14pt]
+        
+        \hrule height 1.2pt \vspace{6pt}
+        {\large \textbf{TETE 3102: MICROCONTROLLERS AND APPLICATIONS}}\\[6pt]
+        \hrule height 1.2pt \vspace{1.4cm}
+        
+        {\large \textbf{COURSEWORK / LABORATORY REPORT}}\\[14pt]
+        {\LARGE \textbf{#1}}\\[10pt]
+        {\large \textit{#2}}\\[1.5cm]
+        
+        {\large \textbf{SUBMITTED BY (GROUP MEMBERS):}}\\[10pt]
+        \begin{tabular}{ll}
+            \toprule
+            \textbf{Student Name} & \textbf{Registration Number} \\
+            \midrule
+            Mukama Robert & 26/U/ETE/21285/PE \\
+            Nabudere Zerubabel & 25/U/ETE/05465/PE \\
+            Nanfuka Shakirah & 25/U/ETE/05468/PE \\
+            Kidega Wilkie Cephas & 25/U/ETE/05460/PE \\
+            \bottomrule
+        \end{tabular}
+        
+        \vspace{1.2cm}
+        {\large \textbf{SUPERVISED BY:}}\\[6pt]
+        {\textbf{\large Dr Mugerwa Dickson PhD}}\\[2pt]
+        {\normalsize Department of Electrical and Electronics Engineering}\\[1.5cm]
+        
+        \vfill
+        \begin{minipage}{0.92\textwidth}
+        \centering\footnotesize
+        A report submitted to the Department of Electrical and Electronics Engineering, Faculty of Engineering, Kyambogo University, in partial fulfilment of the requirements for the course \textbf{TETE 3102: Microcontrollers and Applications} for the award of the degree of\\[4pt]
+        \textbf{\normalsize Bachelor of Engineering in Electrical and Electronics Engineering}
+        \end{minipage}
+    \end{titlepage}
+}
+
+% ----------------------------------------------------
+% Declaration Page Macro
+% ----------------------------------------------------
+\newcommand{\makekyudeclarationpage}{
+    \newpage
+    \thispagestyle{plain}
+    \vspace*{0.5cm}
+    \begin{center}
+        {\Huge \textbf{Declaration}}
+    \end{center}
+    \vspace{1.2cm}
+    
+    We, the undersigned group members, declare that this laboratory and coursework report is our own original work and has not been submitted for any academic award in this or any other institution. All sources of information and literature references have been duly acknowledged.
+    
+    \vspace{1.5cm}
+    \begin{table}[h!]
+    \centering
+    \begin{tabular}{lll}
+        \toprule
+        \textbf{Student Name} & \textbf{Registration Number} & \textbf{Signature \& Date} \\
+        \midrule
+        Mukama Robert & 26/U/ETE/21285/PE & \dotfill \\
+        \addlinespace[10pt]
+        Nabudere Zerubabel & 25/U/ETE/05465/PE & \dotfill \\
+        \addlinespace[10pt]
+        Nanfuka Shakirah & 25/U/ETE/05468/PE & \dotfill \\
+        \addlinespace[10pt]
+        Kidega Wilkie Cephas & 25/U/ETE/05460/PE & \dotfill \\
+        \bottomrule
+    \end{tabular}
+    \end{table}
+    
+    \vspace{2.5cm}
+    This report has been submitted with my approval as the course lecturer and supervisor.\\[2cm]
+    \begin{tabular}{ll}
+        \dotfill & \dotfill \\
+        \textbf{Dr Mugerwa Dickson PhD} & \textbf{Date} \\
+        (Course Lecturer / Supervisor) & 
+    \end{tabular}
+    \newpage
+}

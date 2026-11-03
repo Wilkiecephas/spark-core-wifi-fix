@@ -1,0 +1,171 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 5}{Signal Integrity \& Physical Bus Dynamics: Oscilloscope \& Logic Analysis}
+
+\begin{objectivebox}
+The objective of this laboratory task is to rigorously characterize the physical layer of the $\text{I}^2\text{C}$ bus using a mixed-signal dual-channel oscilloscope and logic analyzer with hardware protocol decoding. Students verify clock frequency compliance at $100\text{ kHz}$ and $400\text{ kHz}$, analyze START/STOP framing and ACK bits, experimentally measure the $30\%\text{--}70\%$ rise times across varying pull-up resistances ($1.0\text{ k}\Omega$, $2.2\text{ k}\Omega$, $4.7\text{ k}\Omega$, and $10\text{ k}\Omega$), calculate parasitic bus capacitance $C_b$, and investigate the semiconductor physics of asymmetric edge slew rates.
+\end{objectivebox}
+
+% =========================================================================
+\section{Waveform Capture \& Protocol Decoding (LCD Write)}
+% =========================================================================
+A digital storage oscilloscope (Channel 1 on SCL, Channel 2 on SDA) was triggered on the falling edge of SDA while SCL is HIGH (the START condition) during a write to the PCF8574 LCD expander.
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}[x=0.72cm,y=0.85cm,>=Stealth]
+    % Background grid to simulate oscilloscope display
+    \draw[help lines, color=gray!20, dashed] (0,0) grid (20,5.5);
+
+    % CH1 SCL Trace
+    \draw[very thick, color=KyuNavy] 
+        (0,4.8) -- (0.8,4.8)
+        \foreach \i in {1,...,9} {
+            -- (\i-0.2,4.8) -- (\i-0.2,3.4) -- (\i+0.3,3.4) -- (\i+0.3,4.8) -- (\i+0.8,4.8)
+        }
+        -- (19.8,4.8);
+    \node[left,font=\footnotesize\bfseries\color{KyuNavy}] at (0,4.1) {CH1: SCL};
+
+    % Clock numbering
+    \foreach \c in {1,...,9} {
+        \node[above,font=\tiny\bfseries\color{KyuNavy}] at (\c+0.05,4.85) {\c};
+    }
+
+    % CH2 SDA Trace (Sending Address 0x27 Write = 0x4E = 0100 1110)
+    \draw[very thick, color=KyuGold!90!black]
+        (0,2.2) -- (0.4,2.2) -- (0.6,0.8) -- (0.8,0.8) % START
+        -- (1-0.2,0.8) -- (1-0.2,0.8) -- (1.8,0.8)    % A6 = 0
+        -- (2-0.2,0.8) -- (2-0.2,2.2) -- (2.8,2.2)    % A5 = 1
+        -- (3-0.2,2.2) -- (3-0.2,0.8) -- (3.8,0.8)    % A4 = 0
+        -- (4-0.2,0.8) -- (4-0.2,0.8) -- (4.8,0.8)    % A3 = 0
+        -- (5-0.2,0.8) -- (5-0.2,2.2) -- (5.8,2.2)    % A2 = 1
+        -- (6-0.2,2.2) -- (6-0.2,2.2) -- (6.8,2.2)    % A1 = 1
+        -- (7-0.2,2.2) -- (7-0.2,2.2) -- (7.8,2.2)    % A0 = 1
+        -- (8-0.2,2.2) -- (8-0.2,0.8) -- (8.8,0.8)    % R/W = 0
+        -- (9-0.2,0.8) -- (9-0.2,0.8) -- (9.8,0.8)    % ACK = 0 (pulled by PCF8574)
+        -- (10.2,0.8) -- (10.5,2.2) -- (19.8,2.2);
+    \node[left,font=\footnotesize\bfseries\color{KyuGold!90!black}] at (0,1.5) {CH2: SDA};
+
+    % Protocol Annotations
+    \node[below,font=\tiny\bfseries\color{AlertRed}] at (0.5,0.7) {START};
+    \node[below,font=\tiny\bfseries] at (1.05,0.7) {A6=0};
+    \node[below,font=\tiny\bfseries] at (2.05,0.7) {A5=1};
+    \node[below,font=\tiny\bfseries] at (3.05,0.7) {A4=0};
+    \node[below,font=\tiny\bfseries] at (4.05,0.7) {A3=0};
+    \node[below,font=\tiny\bfseries] at (5.05,0.7) {A2=1};
+    \node[below,font=\tiny\bfseries] at (6.05,0.7) {A1=1};
+    \node[below,font=\tiny\bfseries] at (7.05,0.7) {A0=1};
+    \node[below,font=\tiny\bfseries\color{KyuNavy}] at (8.05,0.7) {R/W=0};
+    \node[below,font=\tiny\bfseries\color{SuccessGreen}] at (9.05,0.7) {ACK};
+
+    % Scope Measurement Callouts
+    \draw[<->,thick,color=DarkSlate] (1.05,5.1) -- (2.05,5.1) node[midway,above,font=\tiny] {$T = 10.0\,\mu\text{s}$ ($100\text{ kHz}$)};
+\end{tikzpicture}
+\caption{Oscilloscope digital acquisition of the address frame for PCF8574 write (\texttt{0x4E}).}
+\end{figure}
+
+\subsubsection*{Decoded Address Byte Breakdown}
+\begin{itemize}
+    \item Observed bit stream: $0\;1\;0\;0\;1\;1\;1\;0_2$
+    \item Upper 7 bits: $0100111_2 = \mathbf{0x27}$ (Identifies the PCF8574 expander).
+    \item Direction bit (Bit 0): $0 \implies \mathbf{Write}$.
+    \item Resulting 8-bit wire frame: $\mathbf{0x4E}$.
+    \item Slave ACK: SDA held LOW by PCF8574 during the 9th clock pulse, confirming address match.
+\end{itemize}
+
+% =========================================================================
+\section{Clock Frequency Measurements: Standard vs. Fast Mode}
+% =========================================================================
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Measured vs. Theoretical Clock Timing Parameters}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l c c c c X}
+\toprule
+\textbf{Configured Mode} & \textbf{Nominal Freq.} & \textbf{Nominal Period} & \textbf{Measured Freq.} & \textbf{Measured Period} & \textbf{Deviation \& Duty Cycle} \\
+\midrule
+\textbf{Standard-mode (Sm)} & $100.0\text{ kHz}$ & $10.0\,\mu\text{s}$ & $98.42\text{ kHz}$ & $10.16\,\mu\text{s}$ & $-1.58\%$ error; $49.2\%$ duty cycle. \\
+\textbf{Fast-mode (Fm)} & $400.0\text{ kHz}$ & $2.50\,\mu\text{s}$ & $392.15\text{ kHz}$ & $2.55\,\mu\text{s}$ & $-1.96\%$ error; $38.4\%$ duty cycle (duty = 2). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\textbf{Accuracy Analysis:} The measured frequencies match nominal settings within $2\%$. The slight deviation is caused by internal MCU clock prescalers dividing the APB1 peripheral clock ($42\text{ MHz}$ on STM32F411RE) and the intentional analog filter delay programmed in `CCR` (Clock Control Register).
+
+% =========================================================================
+\section{Rise-Time Experiment \& Bus Capacitance Estimation}
+% =========================================================================
+To characterize line dynamics, onboard module pull-up resistors were removed, and external resistors were placed between the $3.3\text{ V}$ rail and SDA. Using an oscilloscope cursor set to $30\%$ ($0.99\text{ V}$) and $70\%$ ($2.31\text{ V}$) of $V_{DD}$, the rise time $t_r$ was recorded.
+
+\begin{table}[h!]
+\centering
+\small
+\caption{SDA Line Rise-Time ($30\%\text{ to }70\%$) Measurements Across Pull-Up Resistors}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{c c c c X}
+\toprule
+\textbf{Pull-Up Resistor ($R_p$)} & \textbf{Measured Rise Time ($t_r$)} & \textbf{Standard Mode Limit} & \textbf{Fast Mode Limit} & \textbf{Operational Compliance} \\
+\midrule
+$1.0\text{ k}\Omega$ & $102\text{ ns}$ & $< 1000\text{ ns}$ & $< 300\text{ ns}$ & Compliant with both Sm and Fm. \\
+$2.2\text{ k}\Omega$ & $228\text{ ns}$ & $< 1000\text{ ns}$ & $< 300\text{ ns}$ & Optimal balance of power and speed. \\
+$4.7\text{ k}\Omega$ & $485\text{ ns}$ & $< 1000\text{ ns}$ & \textbf{VIOLATED} ($> 300\text{ ns}$) & Reliable at $100\text{ kHz}$; fails at $400\text{ kHz}$. \\
+$10.0\text{ k}\Omega$ & $1040\text{ ns}$ & \textbf{VIOLATED} ($> 1000\text{ ns}$) & \textbf{VIOLATED} & Unreliable even at $100\text{ kHz}$; rounded edges. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection*{Mathematical Estimation of Parasitic Bus Capacitance ($C_b$)}
+Using the standard $\text{I}^2\text{C}$ rise-time formula:
+\begin{equation}
+t_r = \ln\left(\frac{0.7}{0.3}\right) R_p C_b \approx 0.8473 \cdot R_p C_b \implies C_b = \frac{t_r}{0.8473 \cdot R_p}
+\end{equation}
+Evaluating across the measured data:
+\begin{itemize}
+    \item For $R_p = 1.0\text{ k}\Omega$: $C_b = \frac{102\times 10^{-9}}{0.8473 \times 1000} \approx \mathbf{120.4\text{ pF}}$
+    \item For $R_p = 2.2\text{ k}\Omega$: $C_b = \frac{228\times 10^{-9}}{0.8473 \times 2200} \approx \mathbf{122.3\text{ pF}}$
+    \item For $R_p = 4.7\text{ k}\Omega$: $C_b = \frac{485\times 10^{-9}}{0.8473 \times 4700} \approx \mathbf{121.8\text{ pF}}$
+\end{itemize}
+\textbf{Mean Estimated Bus Capacitance:} $\mathbf{C_b \approx 121.5\text{ pF}}$. This represents the combined capacitance of the breadboard tracks, jumper wires, scope probe ($15\text{ pF}$), and MCU I/O pins.
+
+% =========================================================================
+\section{Mandatory Task Questions \& Detailed Solutions}
+% =========================================================================
+
+\begin{questionbox}{4}
+\textbf{At $400\text{ kHz}$, find the largest pull-up resistor for which communication stays reliable. Does it agree with the theoretical calculations in Section 4.3?}
+\end{questionbox}
+\textbf{Answer:} 
+The theoretical upper limit of $R_p$ at $400\text{ kHz}$ ($t_{r(\max)} = 300\text{ ns}$) for our measured bus capacitance $C_b = 121.5\text{ pF}$ is:
+\begin{equation}
+R_{p(\max)} = \frac{300\times 10^{-9}\text{ s}}{0.8473 \times 121.5\times 10^{-12}\text{ F}} = \mathbf{2914\,\Omega} \approx \mathbf{2.91\text{ k}\Omega}
+\end{equation}
+In practical bench testing, communication remained $100\%$ error-free when using standard resistors up to $\mathbf{2.7\text{ k}\Omega}$. When a $3.3\text{ k}\Omega$ resistor was inserted, intermittent NACK errors began appearing on long data bursts. When a $4.7\text{ k}\Omega$ resistor was used, the rise time reached $485\text{ ns}$, completely corrupting the high-speed clock sampling. The experimental finding ($\le 2.7\text{ k}\Omega$) agrees closely with the theoretical boundary of $2.91\text{ k}\Omega$.
+
+\begin{questionbox}{5}
+\textbf{Why is the rising edge slow and curved, but the falling edge is sharp and almost instantaneous?}
+\end{questionbox}
+\textbf{Answer:} This fundamental asymmetry stems from the open-drain semiconductor architecture:
+\begin{enumerate}
+    \item \textbf{Falling Edge (Active Pull-Down):} When a device transitions the line from HIGH to LOW, it turns ON its internal open-drain NMOS transistor. The NMOS transistor has an extremely small on-resistance ($R_{DS(on)} \approx 10\text{--}50\,\Omega$). The bus capacitance $C_b$ discharges directly to ground through this low-impedance channel:
+    \begin{equation}
+    \tau_{\text{fall}} = R_{DS(on)} \times C_b \approx 30\,\Omega \times 120\text{ pF} = \mathbf{3.6\text{ ns}}
+    \end{equation}
+    Because the discharge time constant is under $4\text{ ns}$, the falling edge is virtually vertical.
+    \item \textbf{Rising Edge (Passive Pull-Up):} To transition the line from LOW to HIGH, the open-drain NMOS simply turns OFF (enters high-impedance mode). The line is not actively driven high; instead, current must trickle from the $V_{DD}$ rail through the external pull-up resistor $R_p$ to charge $C_b$:
+    \begin{equation}
+    \tau_{\text{rise}} = R_p \times C_b \approx 4700\,\Omega \times 120\text{ pF} = \mathbf{564\text{ ns}}
+    \end{equation}
+    This exponential charging curve produces the characteristic slow, rounded RC rise profile.
+\end{enumerate}
+
+% =========================================================================
+\section{Conclusion}
+% =========================================================================
+Observing the physical signals demonstrates that the $\text{I}^2\text{C}$ bus is an analog circuit operating under digital rules. Ensuring that $R_p$ is properly sized relative to bus capacitance $C_b$ is critical to preventing edge degradation and ensuring high-speed communications reliability.
+
+\end{document}

@@ -1,0 +1,228 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{i2c_report_style}
+
+\begin{document}
+
+\makekyureportheader{LABORATORY REPORT: TASK 2}{I2C Bus Scanner on Dual Platforms: STM32 Nucleo \& Arduino Uno}
+
+\begin{objectivebox}
+The objective of this laboratory investigation is to design, deploy, and evaluate an $\text{I}^2\text{C}$ bus scanner on both the 8-bit AVR architecture (Arduino Uno) and the 32-bit ARM Cortex-M4 architecture (STM32F411RE). Students verify device presence across the 7-bit address spectrum, analyze physical bus disconnection faults, and explain address filtering for reserved $\text{I}^2\text{C}$ protocol ranges.
+\end{objectivebox}
+
+% =========================================================================
+\section{Hardware Setup \& Interfacing Topology}
+% =========================================================================
+The experimental bench comprises an STM32 Nucleo-F411RE board, an Arduino Uno R3, an HD44780 LCD with PCF8574 $\text{I}^2\text{C}$ backpack, and a DS3231 High-Precision Real-Time Clock (RTC) module.
+
+\begin{table}[h!]
+\centering
+\footnotesize
+\caption{System Pinout and Wiring Interconnections}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{p{2.6cm} p{2.0cm} p{2.2cm} p{2.6cm} X}
+\toprule
+\textbf{Peripheral} & \textbf{Pin Function} & \textbf{Arduino Uno Pin} & \textbf{STM32 Nucleo Pin} & \textbf{Electrical Specification} \\
+\midrule
+\multirow{4}{*}{\textbf{LCD1602 (PCF8574)}} 
+    & VCC & 5V & 5V (from Nucleo) & Supply rail for LCD contrast \\
+    & GND & GND & GND & Common ground reference \\
+    & SDA & A4 & PB9 (D14) & AF4 Open-Drain \\
+    & SCL & A5 & PB8 (D15) & AF4 Open-Drain \\
+\midrule
+\multirow{4}{*}{\textbf{DS3231 RTC}} 
+    & VCC & 3.3V or 5V & 3.3V & 2.3V to 5.5V supply \\
+    & GND & GND & GND & Common ground reference \\
+    & SDA & A4 & PB9 & Shared I2C serial data \\
+    & SCL & A5 & PB8 & Shared I2C serial clock \\
+\midrule
+\textbf{Pull-Up Resistors} & $R_p$ ($4.7\text{ k}\Omega$) & A4, A5 to 5V & PB8, PB9 to 3.3V & Ensures fast rise time \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{troublebox}
+\textbf{Critical Voltage Tolerance Note:} While STM32 pins PB8 and PB9 are Five-Volt Tolerant (FT), external pull-up resistors on a bus shared with a 3.3V microcontroller must be pulled to \textbf{3.3V}, or a bidirectional level shifter must be inserted if 5V pull-ups on breakout boards cannot be disabled.
+\end{troublebox}
+
+% =========================================================================
+\section{Firmware Implementation}
+% =========================================================================
+
+\subsection{Platform 1: Arduino Wire Bus Scanner}
+The Arduino scanner interrogates each 7-bit address by initiating a write frame (\texttt{Wire.beginTransmission(addr)}) and ending it (\texttt{Wire.endTransmission()}). If the slave responds with an ACK, \texttt{endTransmission()} returns \texttt{0}.
+
+\begin{lstlisting}[language=C++, caption={Arduino Uno I2C Bus Scanner Implementation}]
+#include <Wire.h>
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial); // Wait for serial monitor connection
+  Wire.begin();
+  Serial.println("\n--- Kyambogo University TETE 3102 ---");
+  Serial.println("Arduino Wire I2C Bus Scanner Initialized");
+}
+
+void loop() {
+  byte error, address;
+  int nDevices = 0;
+
+  Serial.println("\nScanning bus addresses (0x08 to 0x77)...");
+  for (address = 8; address < 120; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+
+    if (error == 0) {
+      Serial.print("SUCCESS: Device found at 7-bit address 0x");
+      if (address < 16) Serial.print("0");
+      Serial.print(address, HEX);
+      Serial.print("  [Write: 0x");
+      Serial.print((address << 1), HEX);
+      Serial.print(", Read: 0x");
+      Serial.print((address << 1) | 1, HEX);
+      Serial.println("]");
+      nDevices++;
+    } else if (error == 4) {
+      Serial.print("ERROR: Unknown protocol error at address 0x");
+      if (address < 16) Serial.print("0");
+      Serial.println(address, HEX);
+    }
+  }
+
+  if (nDevices == 0) {
+    Serial.println("No I2C devices responded on the bus.");
+  } else {
+    Serial.print("Bus scan complete. Found ");
+    Serial.print(nDevices);
+    Serial.println(" active device(s).");
+  }
+
+  delay(4000); // Repeat scan every 4 seconds
+}
+\end{lstlisting}
+
+\subsection{Platform 2: STM32F411RE HAL Bus Scanner}
+In the STM32 HAL, bus discovery is performed using \texttt{HAL\_I2C\_IsDeviceReady()}. This function transmits a START condition and the 8-bit shifted address, waiting up to \texttt{timeout} milliseconds for the slave's ACK bit.
+
+\begin{lstlisting}[language=C, caption={STM32 HAL I2C Bus Scanner Implementation (main.c)}]
+/* Includes placed in USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+
+/* Code placed in USER CODE BEGIN 2 */
+char msg[80];
+int len;
+
+len = snprintf(msg, sizeof(msg), "\r\n=== STM32F411 I2C Scanner (HAL_I2C_IsDeviceReady) ===\r\n");
+HAL_UART_Transmit(&huart2, (uint8_t*)msg, len, 100);
+
+uint8_t count = 0;
+for (uint8_t addr7 = 8; addr7 < 120; addr7++) {
+    /* Pass the 7-bit address shifted left by 1 bit into HAL */
+    uint16_t wire_addr = (uint16_t)(addr7 << 1);
+    
+    /* Trials = 2, Timeout = 10 ms */
+    if (HAL_I2C_IsDeviceReady(&hi2c1, wire_addr, 2, 10) == HAL_OK) {
+        len = snprintf(msg, sizeof(msg), 
+                       "Found Device: 7-bit: 0x%02X | Write: 0x%02X | Read: 0x%02X\r\n", 
+                       addr7, wire_addr, wire_addr | 0x01);
+        HAL_UART_Transmit(&huart2, (uint8_t*)msg, len, 100);
+        count++;
+    }
+}
+
+if (count == 0) {
+    len = snprintf(msg, sizeof(msg), "No devices responded on I2C1.\r\n");
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, len, 100);
+} else {
+    len = snprintf(msg, sizeof(msg), "Scan finished. Total devices detected: %d\r\n", count);
+    HAL_UART_Transmit(&huart2, (uint8_t*)msg, len, 100);
+}
+/* USER CODE END 2 */
+\end{lstlisting}
+
+% =========================================================================
+\section{Experimental Observations \& Fault Injections}
+% =========================================================================
+
+\begin{table}[h!]
+\centering
+\small
+\caption{Bus Scanner Diagnostic Results Across Experimental Conditions}
+\vspace{4pt}
+\begin{tabularx}{\textwidth}{l p{4.2cm} p{4.5cm} X}
+\toprule
+\textbf{Experimental Condition} & \textbf{Arduino Serial Output} & \textbf{STM32 UART2 Output} & \textbf{Physical / Electrical Explanation} \\
+\midrule
+\textbf{Baseline (LCD + DS3231 connected)} 
+    & Found at \texttt{0x27} and \texttt{0x68}. Total: 2 devices. 
+    & Found at \texttt{0x27} and \texttt{0x68}. Total: 2 devices. 
+    & Both slaves recognize their address and pull SDA LOW on the 9th clock. \\
+\midrule
+\textbf{Fault Injection 1 (RTC Disconnected)} 
+    & Found at \texttt{0x27}. Total: 1 device. 
+    & Found at \texttt{0x27}. Total: 1 device. 
+    & Address \texttt{0x68} receives no ACK; line floats HIGH via $R_p$ (NACK). Scanner proceeds normally. \\
+\midrule
+\textbf{Fault Injection 2 (SDA Wire Disconnected)} 
+    & "No I2C devices responded" (or hangs if internal timeouts not met). 
+    & No devices found; scanner completes immediately. 
+    & With SDA open, the master cannot sense any ACK pulse from any slave; all addresses read as NACK. \\
+\midrule
+\textbf{Fault Injection 3 (SCL Wire Disconnected)} 
+    & Scanner hangs or reports error 4 on first address. 
+    & Function returns \texttt{HAL\_BUSY} or \texttt{HAL\_TIMEOUT}. 
+    & Slaves cannot sample address bits without clock edges; master detects bus timeout. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% =========================================================================
+\section{Mandatory Task Questions \& Detailed Solutions}
+% =========================================================================
+
+\begin{questionbox}{1}
+\textbf{Do the Arduino and STM32 give the same list of detected addresses?}
+\end{questionbox}
+\textbf{Answer:} Yes, both platforms return the identical set of active 7-bit addresses: \texttt{0x27} (the PCF8574 LCD expander) and \texttt{0x68} (the DS3231 RTC). The physical protocol on the wire is completely agnostic of whether the master is an 8-bit AVR or a 32-bit ARM MCU; the slave ACKs whenever its unique 7-bit hardware comparator matches the broadcast address.
+
+\begin{questionbox}{2}
+\textbf{Which address range does each platform scan, and why do we deliberately avoid \texttt{0x00} to \texttt{0x07} and \texttt{0x78} to \texttt{0x7F}?}
+\end{questionbox}
+\textbf{Answer:} Both platforms scan from 8 to 119 (\texttt{0x08} to \texttt{0x77}), providing 112 usable slave addresses. The excluded boundary ranges are strictly reserved under the official NXP UM10204 $\text{I}^2\text{C}$ bus standard:
+
+\begin{itemize}
+    \item \texttt{0x00} ($0000000_2$): \textbf{General Call Address} (used to broadcast to all slaves simultaneously) and \textbf{START byte} (used by slow DSPs to synchronize clocks).
+    \item \texttt{0x01} ($0000001_2$): \textbf{CBUS Address} (legacy protocol coexistence).
+    \item \texttt{0x02} ($0000010_2$): Reserved for different bus formats.
+    \item \texttt{0x03} ($0000011_2$): Reserved for future purposes.
+    \item \texttt{0x04} to \texttt{0x07}: High-Speed mode (Hs-mode) master code.
+    \item \texttt{0x78} to \texttt{0x7B} ($11110xx_2$): \textbf{10-bit Slave Addressing} prefix.
+    \item \texttt{0x7C} to \texttt{0x7F} ($11111xx_2$): Reserved by NXP for device ID queries and future expansions.
+\end{itemize}
+Interrogating these reserved addresses during a routine scan can inadvertently reset devices (General Call) or trigger 10-bit addressing state machines on attached slaves, hanging the bus.
+
+\begin{questionbox}{3}
+\textbf{Convert each detected address into its corresponding 8-bit write and read bytes.}
+\end{questionbox}
+\textbf{Answer:}
+\begin{enumerate}
+    \item \textbf{PCF8574 LCD Backpack (7-bit address \texttt{0x27}):}
+    \begin{align*}
+    \text{Binary (7-bit):} \quad & 0100111_2 \\
+    \text{Write Byte ($R/\overline{W}=0$):} \quad & (0x27 \ll 1) \;|\; 0 = 01001110_2 = \mathbf{0x4E} \\
+    \text{Read Byte ($R/\overline{W}=1$):} \quad & (0x27 \ll 1) \;|\; 1 = 01001111_2 = \mathbf{0x4F}
+    \end{align*}
+    \item \textbf{DS3231 RTC Module (7-bit address \texttt{0x68}):}
+    \begin{align*}
+    \text{Binary (7-bit):} \quad & 1101000_2 \\
+    \text{Write Byte ($R/\overline{W}=0$):} \quad & (0x68 \ll 1) \;|\; 0 = 11010000_2 = \mathbf{0xD0} \\
+    \text{Read Byte ($R/\overline{W}=1$):} \quad & (0x68 \ll 1) \;|\; 1 = 11010001_2 = \mathbf{0xD1}
+    \end{align*}
+\end{enumerate}
+
+% =========================================================================
+\section{Conclusion \& Practical Engineering Takeaways}
+% =========================================================================
+The dual-platform scanner confirms that both platforms achieve identical hardware address resolution. The primary engineering difference lies in software abstraction: Arduino's `Wire` library accepts the raw 7-bit value and shifts it internally, whereas STM32's HAL requires the programmer to explicitly shift the 7-bit value (`addr << 1`), placing the responsibility for bit alignment on the embedded systems engineer.
+
+\end{document}
